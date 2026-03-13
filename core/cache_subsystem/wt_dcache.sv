@@ -52,7 +52,8 @@ module wt_dcache
     input  dcache_rtrn_t mem_rtrn_i,
     output logic         mem_data_req_o,
     input  logic         mem_data_ack_i,
-    output dcache_req_t  mem_data_o
+    output dcache_req_t  mem_data_o,
+    output logic hit_cache_o
 );
 
   localparam DCACHE_CL_IDX_WIDTH = $clog2(CVA6Cfg.DCACHE_NUM_WORDS);
@@ -124,6 +125,9 @@ module wt_dcache
   // wbuffer <-> memory
   wbuffer_t [     CVA6Cfg.WtDcacheWbufDepth-1:0]                                  wbuffer_data;
 
+  //Protect 
+  logic     [                      NumPorts-1:0]                                  hit_port;
+  assign hit_cache_o = hit_port[1];
 
   ///////////////////////////////////////////////////////
   // miss handling unit
@@ -231,7 +235,8 @@ module wt_dcache
           .rd_data_i      (rd_data),
           .rd_user_i      (rd_user),
           .rd_vld_bits_i  (rd_vld_bits),
-          .rd_hit_oh_i    (rd_hit_oh)
+          .rd_hit_oh_i    (rd_hit_oh),
+          .hit_o          (hit_port[k])             
       );
     end else begin
       assign rd_prio[k] = 1'b0;

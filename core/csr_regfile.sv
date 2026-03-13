@@ -167,7 +167,9 @@ module csr_regfile
     // TO_BE_COMPLETED - PERF_COUNTERS
     output logic [31:0] mcountinhibit_o,
     // RVFI
-    output rvfi_probes_csr_t rvfi_csr_o
+    output rvfi_probes_csr_t rvfi_csr_o,
+    // Protect
+    output logic csr_lecture_cycle
 );
 
   localparam logic [63:0] SMODE_STATUS_READ_MASK = ariane_pkg::smode_status_read_mask(CVA6Cfg);
@@ -326,6 +328,7 @@ module csr_regfile
     virtual_read_access_exception = 1'b0;
     csr_rdata = '0;
     perf_addr_o = csr_addr.address[11:0];
+    csr_lecture_cycle = 1'b0;
 
     if (csr_read) begin
       unique case (conv_csr_addr.address)
@@ -561,14 +564,24 @@ module csr_regfile
         riscv::CSR_MINSTRETH:
         if (CVA6Cfg.XLEN == 32) csr_rdata = instret_q[63:32];
         else read_access_exception = 1'b1;
-        riscv::CSR_CYCLE:
-        if (CVA6Cfg.RVZicntr) csr_rdata = cycle_q[CVA6Cfg.XLEN-1:0];
-        else read_access_exception = 1'b1;
+        riscv::CSR_CYCLE: //Protect
+        if (CVA6Cfg.RVZicntr) begin 
+          csr_rdata = cycle_q[CVA6Cfg.XLEN-1:0];
+          csr_lecture_cycle = 1'b1;
+        end else begin
+          read_access_exception = 1'b1;
+        end 
         riscv::CSR_CYCLEH:
-        if (CVA6Cfg.RVZicntr)
-          if (CVA6Cfg.XLEN == 32) csr_rdata = cycle_q[63:32];
-          else read_access_exception = 1'b1;
-        else read_access_exception = 1'b1;
+        if (CVA6Cfg.RVZicntr) begin
+          if (CVA6Cfg.XLEN == 32) begin 
+            csr_rdata = cycle_q[63:32];
+            csr_lecture_cycle = 1'b1;
+          end else begin 
+            read_access_exception = 1'b1;
+          end 
+        end else begin
+          read_access_exception = 1'b1;
+        end 
         riscv::CSR_INSTRET:
         if (CVA6Cfg.RVZicntr) csr_rdata = instret_q[CVA6Cfg.XLEN-1:0];
         else read_access_exception = 1'b1;

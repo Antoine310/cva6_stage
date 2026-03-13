@@ -87,7 +87,9 @@ module commit_stage
     // TO_BE_COMPLETED - CONTROLLER
     output logic hfence_vvma_o,
     // TO_BE_COMPLETED - CONTROLLER
-    output logic hfence_gvma_o
+    output logic hfence_gvma_o,
+    // Flag Hit + read CSR 
+    input logic protect_en_i
 );
 
   // ila_0 i_ila_commit (
@@ -210,7 +212,7 @@ module commit_stage
           csr_op_o    = commit_instr_i[0].op;
           csr_wdata_o = commit_instr_i[0].result;
           if (!commit_drop_i[0]) begin
-            if (!csr_exception_i.valid) begin
+            if (!csr_exception_i.valid && !protect_miss_en) begin // Protect : Check miss + read 
               commit_csr_o = 1'b1;
               wdata_o[0]   = csr_rdata_i;
             end else begin

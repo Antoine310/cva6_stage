@@ -563,6 +563,10 @@ module cva6
   riscv::pmpcfg_t [CVA6Cfg.NrPMPEntries-1:0] pmpcfg;
   logic [CVA6Cfg.NrPMPEntries-1:0][CVA6Cfg.PLEN-3:0] pmpaddr;
   logic [31:0] mcountinhibit_csr_perf;
+  //Protect 
+  logic csr_lecture_cycle_regfile;
+  logic protect_en_commit;
+
   // ----------------------------
   // Performance Counters <-> *
   // ----------------------------
@@ -574,6 +578,7 @@ module cva6
   logic itlb_miss_ex_perf;
   logic dtlb_miss_ex_perf;
   logic dcache_miss_cache_perf;
+  logic dcache_hit_cache;
   logic icache_miss_cache_perf;
   logic [NumPorts-1:0][CVA6Cfg.DCACHE_SET_ASSOC-1:0] miss_vld_bits;
   logic stall_issue;
@@ -1067,7 +1072,8 @@ module cva6
       .flush_commit_o    (flush_commit),
       .sfence_vma_o      (sfence_vma_commit_controller),
       .hfence_vvma_o     (hfence_vvma_commit_controller),
-      .hfence_gvma_o     (hfence_gvma_commit_controller)
+      .hfence_gvma_o     (hfence_gvma_commit_controller),
+      .protect_en_i      (protect_en_commit)
   );
 
   assign commit_ack = commit_macro_ack & ~commit_drop_id_commit;
@@ -1155,9 +1161,22 @@ module cva6
       .pmpaddr_o               (pmpaddr),
       .mcountinhibit_o         (mcountinhibit_csr_perf),
       //RVFI
-      .rvfi_csr_o              (rvfi_csr)
+      .rvfi_csr_o              (rvfi_csr),
+      .csr_lecture_cycle       (csr_lecture_cycle_regfile)
   );
 
+  // ------------------------
+  // Protec module 
+  // ------------------------
+    timewarp #(
+        .CVA6Cfg(CVA6Cfg),
+    ) timewarp_i (
+        .clk_i         (clk_i),
+        .rst_ni        (rst_ni),
+        .lecture_cycle (csr_lecture_cycle_regfile),
+        .dcache_hit_i (dcache_hit_cache),
+        .protect_en_o  (protect_en_commit)
+    );
   // ------------------------
   // Performance Counters
   // ------------------------
@@ -1324,7 +1343,8 @@ module cva6
         .noc_resp_i        (noc_resp_i),
         .inval_addr_i      (inval_addr),
         .inval_valid_i     (inval_valid),
-        .inval_ready_o     (inval_ready)
+        .inval_ready_o     (inval_ready),
+        .hit_cache_o       (dcache_hit_cache)
     );
   end else if (CVA6Cfg.DCacheType == config_pkg::HPDCACHE) begin : gen_cache_hpd
     cva6_hpdcache_subsystem #(

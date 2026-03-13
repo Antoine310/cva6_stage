@@ -71,7 +71,8 @@ module wt_cache_subsystem
     // Invalidations
     input logic [63:0] inval_addr_i,
     input logic inval_valid_i,
-    output logic inval_ready_o
+    output logic inval_ready_o,
+    output logic hit_cache_o
     // TODO: interrupt interface
 );
 
@@ -171,7 +172,8 @@ module wt_cache_subsystem
       .mem_rtrn_i      (adapter_dcache),
       .mem_data_req_o  (dcache_adapter_data_req),
       .mem_data_ack_i  (adapter_dcache_data_ack),
-      .mem_data_o      (dcache_adapter)
+      .mem_data_o      (dcache_adapter),
+      .hit_cache_o
   );
 
 

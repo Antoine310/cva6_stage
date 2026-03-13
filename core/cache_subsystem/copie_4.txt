@@ -1,0 +1,3710 @@
+// Copyright 2018 ETH Zurich and University of Bologna.
+// Copyright and related rights are licensed under the Solderpad Hardware
+// License, Version 0.51 (the "License"); you may not use this file except in
+// compliance with the License.  You may obtain a copy of the License at
+// http://solderpad.org/licenses/SHL-0.51. Unless required by applicable law
+// or agreed to in writing, software, hardware and materials distributed under
+// this License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
+// CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+// Author: Michael Schaffner <schaffner@iis.ee.ethz.ch>, ETH Zurich
+// Date: 13.09.2018
+// Description: Write-Through Data cache that is compatible with openpiton.
+
+
+module wt_dcache
+  import ariane_pkg::*;
+  import wt_cache_pkg::*;
+#(
+    parameter config_pkg::cva6_cfg_t CVA6Cfg = config_pkg::cva6_cfg_empty,
+    parameter type dcache_req_i_t = logic,
+    parameter type dcache_req_o_t = logic,
+    parameter type dcache_req_t = logic,
+    parameter type dcache_rtrn_t = logic,
+    parameter int unsigned NumPorts = 4,  // number of miss ports
+    // ID to be used for read and AMO transactions.
+    // note that the write buffer uses all IDs up to DCACHE_MAX_TX-1 for write transactions
+    parameter logic [CVA6Cfg.MEM_TID_WIDTH-1:0] RdAmoTxId = 1
+) (
+    input logic clk_i,  // Clock
+    input logic rst_ni, // Asynchronous reset active low
+
+    // Cache management
+    input logic enable_i,  // from CSR
+    input logic flush_i,  // high until acknowledged
+    output logic flush_ack_o,  // send a single cycle acknowledge signal when the cache is flushed
+    output logic miss_o,  // we missed on a ld/st
+    output logic wbuffer_empty_o,
+    output logic wbuffer_not_ni_o,
+
+    // AMO interface
+    input  amo_req_t  amo_req_i,
+    output amo_resp_t amo_resp_o,
+
+    // Request ports
+    input  dcache_req_i_t [NumPorts-1:0] req_ports_i,
+    output dcache_req_o_t [NumPorts-1:0] req_ports_o,
+
+    output logic [NumPorts-1:0][CVA6Cfg.DCACHE_SET_ASSOC-1:0] miss_vld_bits_o,
+
+    input  logic         mem_rtrn_vld_i,
+    input  dcache_rtrn_t mem_rtrn_i,
+    output logic         mem_data_req_o,
+    input  logic         mem_data_ack_i,
+    output dcache_req_t  mem_data_o
+);
+
+  localparam DCACHE_CL_IDX_WIDTH = $clog2(CVA6Cfg.DCACHE_NUM_WORDS);
+
+  localparam type wbuffer_t = struct packed {
+    logic [CVA6Cfg.DCACHE_TAG_WIDTH+(CVA6Cfg.DCACHE_INDEX_WIDTH-CVA6Cfg.XLEN_ALIGN_BYTES)-1:0] wtag;
+    logic [CVA6Cfg.XLEN-1:0] data;
+    logic [CVA6Cfg.DCACHE_USER_WIDTH-1:0] user;
+    logic [(CVA6Cfg.XLEN/8)-1:0] dirty;  // byte is dirty
+    logic [(CVA6Cfg.XLEN/8)-1:0] valid;  // byte is valid
+    logic [(CVA6Cfg.XLEN/8)-1:0] txblock;  // byte is part of transaction in-flight
+    logic checked;  // if cache state of this word has been checked
+    logic [CVA6Cfg.DCACHE_SET_ASSOC-1:0] hit_oh;  // valid way in the cache
+  };
+
+  // miss unit <-> read controllers
+  logic                                                                           cache_en;
+
+  // miss unit <-> memory
+  logic                                                                           wr_cl_vld;
+  logic                                                                           wr_cl_nc;
+  logic     [      CVA6Cfg.DCACHE_SET_ASSOC-1:0]                                  wr_cl_we;
+  logic     [      CVA6Cfg.DCACHE_TAG_WIDTH-1:0]                                  wr_cl_tag;
+  logic     [           DCACHE_CL_IDX_WIDTH-1:0]                                  wr_cl_idx;
+  logic     [   CVA6Cfg.DCACHE_OFFSET_WIDTH-1:0]                                  wr_cl_off;
+  logic     [     CVA6Cfg.DCACHE_LINE_WIDTH-1:0]                                  wr_cl_data;
+  logic     [CVA6Cfg.DCACHE_USER_LINE_WIDTH-1:0]                                  wr_cl_user;
+  logic     [   CVA6Cfg.DCACHE_LINE_WIDTH/8-1:0]                                  wr_cl_data_be;
+  logic     [      CVA6Cfg.DCACHE_SET_ASSOC-1:0]                                  wr_vld_bits;
+  logic     [      CVA6Cfg.DCACHE_SET_ASSOC-1:0]                                  wr_req;
+  logic                                                                           wr_ack;
+  logic     [           DCACHE_CL_IDX_WIDTH-1:0]                                  wr_idx;
+  logic     [   CVA6Cfg.DCACHE_OFFSET_WIDTH-1:0]                                  wr_off;
+  logic     [                  CVA6Cfg.XLEN-1:0]                                  wr_data;
+  logic     [              (CVA6Cfg.XLEN/8)-1:0]                                  wr_data_be;
+  logic     [     CVA6Cfg.DCACHE_USER_WIDTH-1:0]                                  wr_user;
+
+  // miss unit <-> controllers/wbuffer
+  logic     [                      NumPorts-1:0]                                  miss_req;
+  logic     [                      NumPorts-1:0]                                  miss_ack;
+  logic     [                      NumPorts-1:0]                                  miss_nc;
+  logic     [                      NumPorts-1:0]                                  miss_we;
+  logic     [                      NumPorts-1:0][               CVA6Cfg.XLEN-1:0] miss_wdata;
+  logic     [                      NumPorts-1:0][  CVA6Cfg.DCACHE_USER_WIDTH-1:0] miss_wuser;
+  logic     [                      NumPorts-1:0][               CVA6Cfg.PLEN-1:0] miss_paddr;
+  logic     [                      NumPorts-1:0][                            2:0] miss_size;
+  logic     [                      NumPorts-1:0][      CVA6Cfg.MEM_TID_WIDTH-1:0] miss_id;
+  logic     [                      NumPorts-1:0]                                  miss_replay;
+  logic     [                      NumPorts-1:0]                                  miss_rtrn_vld;
+  logic     [         CVA6Cfg.MEM_TID_WIDTH-1:0]                                  miss_rtrn_id;
+
+  // memory <-> read controllers/miss unit
+  logic     [                      NumPorts-1:0]                                  rd_prio;
+  logic     [                      NumPorts-1:0]                                  rd_tag_only;
+  logic     [                      NumPorts-1:0]                                  rd_req;
+  logic     [                      NumPorts-1:0]                                  rd_ack;
+  logic     [                      NumPorts-1:0][   CVA6Cfg.DCACHE_TAG_WIDTH-1:0] rd_tag;
+  logic     [                      NumPorts-1:0][        DCACHE_CL_IDX_WIDTH-1:0] rd_idx;
+  logic     [                      NumPorts-1:0][CVA6Cfg.DCACHE_OFFSET_WIDTH-1:0] rd_off;
+  logic     [                  CVA6Cfg.XLEN-1:0]                                  rd_data;
+  logic     [     CVA6Cfg.DCACHE_USER_WIDTH-1:0]                                  rd_user;
+  logic     [      CVA6Cfg.DCACHE_SET_ASSOC-1:0]                                  rd_vld_bits;
+  logic     [      CVA6Cfg.DCACHE_SET_ASSOC-1:0]                                  rd_hit_oh;
+
+  // miss unit <-> wbuffer
+  logic     [         CVA6Cfg.DCACHE_MAX_TX-1:0][               CVA6Cfg.PLEN-1:0] tx_paddr;
+  logic     [         CVA6Cfg.DCACHE_MAX_TX-1:0]                                  tx_vld;
+
+  // wbuffer <-> memory
+  wbuffer_t [     CVA6Cfg.WtDcacheWbufDepth-1:0]                                  wbuffer_data;
+
+
+  ///////////////////////////////////////////////////////
+  // miss handling unit
+  ///////////////////////////////////////////////////////
+
+  wt_dcache_missunit #(
+      .CVA6Cfg(CVA6Cfg),
+      .DCACHE_CL_IDX_WIDTH(DCACHE_CL_IDX_WIDTH),
+      .dcache_req_t(dcache_req_t),
+      .dcache_rtrn_t(dcache_rtrn_t),
+      .AmoTxId(RdAmoTxId),
+      .NumPorts(NumPorts)
+  ) i_wt_dcache_missunit (
+      .clk_i          (clk_i),
+      .rst_ni         (rst_ni),
+      .enable_i       (enable_i),
+      .flush_i        (flush_i),
+      .flush_ack_o    (flush_ack_o),
+      .miss_o         (miss_o),
+      .wbuffer_empty_i(wbuffer_empty_o),
+      .cache_en_o     (cache_en),
+      // amo interface
+      .amo_req_i      (amo_req_i),
+      .amo_resp_o     (amo_resp_o),
+      // miss handling interface
+      .miss_req_i     (miss_req),
+      .miss_ack_o     (miss_ack),
+      .miss_nc_i      (miss_nc),
+      .miss_we_i      (miss_we),
+      .miss_wdata_i   (miss_wdata),
+      .miss_wuser_i   (miss_wuser),
+      .miss_paddr_i   (miss_paddr),
+      .miss_vld_bits_i(miss_vld_bits_o),
+      .miss_size_i    (miss_size),
+      .miss_id_i      (miss_id),
+      .miss_replay_o  (miss_replay),
+      .miss_rtrn_vld_o(miss_rtrn_vld),
+      .miss_rtrn_id_o (miss_rtrn_id),
+      // from writebuffer
+      .tx_paddr_i     (tx_paddr),
+      .tx_vld_i       (tx_vld),
+      // cache memory interface
+      .wr_cl_vld_o    (wr_cl_vld),
+      .wr_cl_nc_o     (wr_cl_nc),
+      .wr_cl_we_o     (wr_cl_we),
+      .wr_cl_tag_o    (wr_cl_tag),
+      .wr_cl_idx_o    (wr_cl_idx),
+      .wr_cl_off_o    (wr_cl_off),
+      .wr_cl_data_o   (wr_cl_data),
+      .wr_cl_user_o   (wr_cl_user),
+      .wr_cl_data_be_o(wr_cl_data_be),
+      .wr_vld_bits_o  (wr_vld_bits),
+      // memory interface
+      .mem_rtrn_vld_i (mem_rtrn_vld_i),
+      .mem_rtrn_i     (mem_rtrn_i),
+      .mem_data_req_o (mem_data_req_o),
+      .mem_data_ack_i (mem_data_ack_i),
+      .mem_data_o     (mem_data_o)
+  );
+
+  ///////////////////////////////////////////////////////
+  // read controllers (LD unit and PTW/MMU)
+  ///////////////////////////////////////////////////////
+
+  // 0 is used by MMU, 1 by READ access requests
+  for (genvar k = 0; k < NumPorts - 1; k++) begin : gen_rd_ports
+    // set these to high prio ports
+    if ((k == 0 && CVA6Cfg.MmuPresent) || (k == 1) || (k == 2 && CVA6Cfg.EnableAccelerator)) begin
+      assign rd_prio[k] = 1'b1;
+      wt_dcache_ctrl #(
+          .CVA6Cfg(CVA6Cfg),
+          .DCACHE_CL_IDX_WIDTH(DCACHE_CL_IDX_WIDTH),
+          .dcache_req_i_t(dcache_req_i_t),
+          .dcache_req_o_t(dcache_req_o_t),
+          .RdTxId(RdAmoTxId)
+      ) i_wt_dcache_ctrl (
+          .clk_i          (clk_i),
+          .rst_ni         (rst_ni),
+          .cache_en_i     (cache_en),
+          // reqs from core
+          .req_port_i     (req_ports_i[k]),
+          .req_port_o     (req_ports_o[k]),
+          // miss interface
+          .miss_req_o     (miss_req[k]),
+          .miss_ack_i     (miss_ack[k]),
+          .miss_we_o      (miss_we[k]),
+          .miss_wdata_o   (miss_wdata[k]),
+          .miss_wuser_o   (miss_wuser[k]),
+          .miss_vld_bits_o(miss_vld_bits_o[k]),
+          .miss_paddr_o   (miss_paddr[k]),
+          .miss_nc_o      (miss_nc[k]),
+          .miss_size_o    (miss_size[k]),
+          .miss_id_o      (miss_id[k]),
+          .miss_replay_i  (miss_replay[k]),
+          .miss_rtrn_vld_i(miss_rtrn_vld[k]),
+          // used to detect readout mux collisions
+          .wr_cl_vld_i    (wr_cl_vld),
+          // cache mem interface
+          .rd_tag_o       (rd_tag[k]),
+          .rd_idx_o       (rd_idx[k]),
+          .rd_off_o       (rd_off[k]),
+          .rd_req_o       (rd_req[k]),
+          .rd_tag_only_o  (rd_tag_only[k]),
+          .rd_ack_i       (rd_ack[k]),
+          .rd_data_i      (rd_data),
+          .rd_user_i      (rd_user),
+          .rd_vld_bits_i  (rd_vld_bits),
+          .rd_hit_oh_i    (rd_hit_oh)
+      );
+    end else begin
+      assign rd_prio[k] = 1'b0;
+      assign req_ports_o[k] = '0;
+      assign miss_req[k] = 1'b0;
+      assign miss_we[k] = 1'b0;
+      assign miss_wdata[k] = {{CVA6Cfg.XLEN} {1'b0}};
+      assign miss_wuser[k] = {{CVA6Cfg.DCACHE_USER_WIDTH} {1'b0}};
+      assign miss_vld_bits_o[k] = {{CVA6Cfg.DCACHE_SET_ASSOC} {1'b0}};
+      assign miss_paddr[k] = {{CVA6Cfg.PLEN} {1'b0}};
+      assign miss_nc[k] = 1'b0;
+      assign miss_size[k] = 3'b0;
+      assign miss_id[k] = {{CVA6Cfg.MEM_TID_WIDTH} {1'b0}};
+      assign rd_tag[k] = {{CVA6Cfg.DCACHE_TAG_WIDTH} {1'b0}};
+      assign rd_idx[k] = {{DCACHE_CL_IDX_WIDTH} {1'b0}};
+      assign rd_off[k] = {{CVA6Cfg.DCACHE_OFFSET_WIDTH} {1'b0}};
+      assign rd_req[k] = 1'b0;
+      assign rd_tag_only[k] = 1'b0;
+    end
+  end
+
+  ///////////////////////////////////////////////////////
+  // store unit controller
+  ///////////////////////////////////////////////////////
+
+  // set read port to low priority
+  assign rd_prio[NumPorts-1] = 1'b0;
+
+  wt_dcache_wbuffer #(
+      .CVA6Cfg(CVA6Cfg),
+      .DCACHE_CL_IDX_WIDTH(DCACHE_CL_IDX_WIDTH),
+      .dcache_req_i_t(dcache_req_i_t),
+      .dcache_req_o_t(dcache_req_o_t),
+      .wbuffer_t(wbuffer_t)
+  ) i_wt_dcache_wbuffer (
+      .clk_i          (clk_i),
+      .rst_ni         (rst_ni),
+      .empty_o        (wbuffer_empty_o),
+      .not_ni_o       (wbuffer_not_ni_o),
+      // TODO: fix this
+      .cache_en_i     (cache_en),
+      // .cache_en_i      ( '0                  ),
+      // request ports from core (store unit)
+      .req_port_i     (req_ports_i[NumPorts-1]),
+      .req_port_o     (req_ports_o[NumPorts-1]),
+      // miss unit interface
+      .miss_req_o     (miss_req[NumPorts-1]),
+      .miss_ack_i     (miss_ack[NumPorts-1]),
+      .miss_we_o      (miss_we[NumPorts-1]),
+      .miss_wdata_o   (miss_wdata[NumPorts-1]),
+      .miss_wuser_o   (miss_wuser[NumPorts-1]),
+      .miss_vld_bits_o(miss_vld_bits_o[NumPorts-1]),
+      .miss_paddr_o   (miss_paddr[NumPorts-1]),
+      .miss_nc_o      (miss_nc[NumPorts-1]),
+      .miss_size_o    (miss_size[NumPorts-1]),
+      .miss_id_o      (miss_id[NumPorts-1]),
+      .miss_rtrn_vld_i(miss_rtrn_vld[NumPorts-1]),
+      .miss_rtrn_id_i (miss_rtrn_id),
+      // cache read interface
+      .rd_tag_o       (rd_tag[NumPorts-1]),
+      .rd_idx_o       (rd_idx[NumPorts-1]),
+      .rd_off_o       (rd_off[NumPorts-1]),
+      .rd_req_o       (rd_req[NumPorts-1]),
+      .rd_tag_only_o  (rd_tag_only[NumPorts-1]),
+      .rd_ack_i       (rd_ack[NumPorts-1]),
+      .rd_data_i      (rd_data),
+      .rd_vld_bits_i  (rd_vld_bits),
+      .rd_hit_oh_i    (rd_hit_oh),
+      // incoming invalidations/cache refills
+      .wr_cl_vld_i    (wr_cl_vld),
+      .wr_cl_idx_i    (wr_cl_idx),
+      // single word write interface
+      .wr_req_o       (wr_req),
+      .wr_ack_i       (wr_ack),
+      .wr_idx_o       (wr_idx),
+      .wr_off_o       (wr_off),
+      .wr_data_o      (wr_data),
+      .wr_user_o      (wr_user),
+      .wr_data_be_o   (wr_data_be),
+      // write buffer forwarding
+      .wbuffer_data_o (wbuffer_data),
+      .tx_paddr_o     (tx_paddr),
+      .tx_vld_o       (tx_vld)
+  );
+
+  ///////////////////////////////////////////////////////
+  // memory arrays, arbitration and tag comparison
+  ///////////////////////////////////////////////////////
+
+  wt_dcache_mem #(
+      .CVA6Cfg(CVA6Cfg),
+      .DCACHE_CL_IDX_WIDTH(DCACHE_CL_IDX_WIDTH),
+      .wbuffer_t(wbuffer_t),
+      .NumPorts(NumPorts)
+  ) i_wt_dcache_mem (
+      .clk_i          (clk_i),
+      .rst_ni         (rst_ni),
+      // read ports
+      .rd_prio_i      (rd_prio),
+      .rd_tag_i       (rd_tag),
+      .rd_idx_i       (rd_idx),
+      .rd_off_i       (rd_off),
+      .rd_req_i       (rd_req),
+      .rd_tag_only_i  (rd_tag_only),
+      .rd_ack_o       (rd_ack),
+      .rd_vld_bits_o  (rd_vld_bits),
+      .rd_hit_oh_o    (rd_hit_oh),
+      .rd_data_o      (rd_data),
+      .rd_user_o      (rd_user),
+      // cacheline write port
+      .wr_cl_vld_i    (wr_cl_vld),
+      .wr_cl_nc_i     (wr_cl_nc),
+      .wr_cl_we_i     (wr_cl_we),
+      .wr_cl_tag_i    (wr_cl_tag),
+      .wr_cl_idx_i    (wr_cl_idx),
+      .wr_cl_off_i    (wr_cl_off),
+      .wr_cl_data_i   (wr_cl_data),
+      .wr_cl_user_i   (wr_cl_user),
+      .wr_cl_data_be_i(wr_cl_data_be),
+      .wr_vld_bits_i  (wr_vld_bits),
+      // single word write port
+      .wr_req_i       (wr_req),
+      .wr_ack_o       (wr_ack),
+      .wr_idx_i       (wr_idx),
+      .wr_off_i       (wr_off),
+      .wr_data_i      (wr_data),
+      .wr_user_i      (wr_user),
+      .wr_data_be_i   (wr_data_be),
+      // write buffer forwarding
+      .wbuffer_data_i (wbuffer_data)
+  );
+
+  ///////////////////////////////////////////////////////
+  // assertions
+  ///////////////////////////////////////////////////////
+
+  // check for concurrency issues
+
+
+  //pragma translate_off
+`ifndef VERILATOR
+  flush :
+  assert property (
+    @(posedge clk_i) disable iff (!rst_ni) flush_i |-> flush_ack_o |-> wbuffer_empty_o)
+  else $fatal(1, "[l1 dcache] flushed cache implies flushed wbuffer");
+
+  initial begin
+    // assert wrong parameterizations
+    assert (CVA6Cfg.DCACHE_INDEX_WIDTH <= 12)
+    else $fatal(1, "[l1 dcache] cache index width can be maximum 12bit since VM uses 4kB pages");
+  end
+`endif
+  //pragma translate_on
+
+endmodule  // wt_dcache
+// Copyright 2018 ETH Zurich and University of Bologna.
+// Copyright and related rights are licensed under the Solderpad Hardware
+// License, Version 0.51 (the "License"); you may not use this file except in
+// compliance with the License.  You may obtain a copy of the License at
+// http://solderpad.org/licenses/SHL-0.51. Unless required by applicable law
+// or agreed to in writing, software, hardware and materials distributed under
+// this License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
+// CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+// Author: Michael Schaffner <schaffner@iis.ee.ethz.ch>, ETH Zurich
+// Date: 13.09.2018
+// Description: miss controller for WT dcache. Note that the current assumption
+// is that the port with the highest index issues writes instead of reads.
+
+
+module wt_dcache_missunit
+  import ariane_pkg::*;
+  import wt_cache_pkg::*;
+#(
+    parameter config_pkg::cva6_cfg_t CVA6Cfg = config_pkg::cva6_cfg_empty,
+    parameter DCACHE_CL_IDX_WIDTH = 0,
+    parameter type dcache_req_t = logic,
+    parameter type dcache_rtrn_t = logic,
+    parameter logic [CVA6Cfg.MEM_TID_WIDTH-1:0] AmoTxId = 1,  // TX id to be used for AMOs
+    parameter int unsigned NumPorts = 4  // number of miss ports
+) (
+    input logic clk_i,  // Clock
+    input logic rst_ni,  // Asynchronous reset active low
+    // cache management, signals from/to core
+    input logic enable_i,  // from CSR
+    input  logic                                       flush_i,     // flush request, this waits for pending tx (write, read) to finish and will clear the cache
+    output logic flush_ack_o,  // send a single cycle acknowledge signal when the cache is flushed
+    output logic miss_o,  // we missed on a ld/st
+    // local cache management signals
+    input logic wbuffer_empty_i,
+    output logic cache_en_o,  // local cache enable signal
+    // AMO interface
+    input amo_req_t amo_req_i,
+    output amo_resp_t amo_resp_o,
+    // miss handling interface (ld, ptw, wbuffer)
+    input logic [NumPorts-1:0] miss_req_i,
+    output logic [NumPorts-1:0] miss_ack_o,
+    input logic [NumPorts-1:0] miss_nc_i,
+    input logic [NumPorts-1:0] miss_we_i,
+    input logic [NumPorts-1:0][CVA6Cfg.XLEN-1:0] miss_wdata_i,
+    input logic [NumPorts-1:0][CVA6Cfg.DCACHE_USER_WIDTH-1:0] miss_wuser_i,
+    input logic [NumPorts-1:0][CVA6Cfg.PLEN-1:0] miss_paddr_i,
+    input logic [NumPorts-1:0][CVA6Cfg.DCACHE_SET_ASSOC-1:0] miss_vld_bits_i,
+    input logic [NumPorts-1:0][2:0] miss_size_i,
+    input logic [NumPorts-1:0][CVA6Cfg.MEM_TID_WIDTH-1:0] miss_id_i,  // used as transaction ID
+    // signals that the request collided with a pending read
+    output logic [NumPorts-1:0] miss_replay_o,
+    // signals response from memory
+    output logic [NumPorts-1:0] miss_rtrn_vld_o,
+    output logic [CVA6Cfg.MEM_TID_WIDTH-1:0]                  miss_rtrn_id_o,     // only used for writes, set to zero fro reads
+    // from writebuffer
+    input  logic [CVA6Cfg.DCACHE_MAX_TX-1:0][CVA6Cfg.PLEN-1:0]  tx_paddr_i,         // used to check for address collisions with read operations
+    input  logic [CVA6Cfg.DCACHE_MAX_TX-1:0]                   tx_vld_i,           // used to check for address collisions with read operations
+    // write interface to cache memory
+    output logic wr_cl_vld_o,  // writes a full cacheline
+    output logic wr_cl_nc_o,  // writes a full cacheline
+    output logic [CVA6Cfg.DCACHE_SET_ASSOC-1:0] wr_cl_we_o,  // writes a full cacheline
+    output logic [CVA6Cfg.DCACHE_TAG_WIDTH-1:0] wr_cl_tag_o,
+    output logic [DCACHE_CL_IDX_WIDTH-1:0] wr_cl_idx_o,
+    output logic [CVA6Cfg.DCACHE_OFFSET_WIDTH-1:0] wr_cl_off_o,
+    output logic [CVA6Cfg.DCACHE_LINE_WIDTH-1:0] wr_cl_data_o,
+    output logic [CVA6Cfg.DCACHE_USER_LINE_WIDTH-1:0] wr_cl_user_o,
+    output logic [CVA6Cfg.DCACHE_LINE_WIDTH/8-1:0] wr_cl_data_be_o,
+    output logic [CVA6Cfg.DCACHE_SET_ASSOC-1:0] wr_vld_bits_o,
+    // memory interface
+    input logic mem_rtrn_vld_i,
+    input dcache_rtrn_t mem_rtrn_i,
+    output logic mem_data_req_o,
+    input logic mem_data_ack_i,
+    output dcache_req_t mem_data_o
+);
+
+  // functions
+  function automatic logic [CVA6Cfg.DCACHE_SET_ASSOC-1:0] dcache_way_bin2oh(
+      input logic [CVA6Cfg.DCACHE_SET_ASSOC_WIDTH-1:0] in);
+    logic [CVA6Cfg.DCACHE_SET_ASSOC-1:0] out;
+    out     = '0;
+    out[in] = 1'b1;
+    return out;
+  endfunction
+
+  // align the physical address to the specified size:
+  // 000: bytes
+  // 001: hword
+  // 010: word
+  // 011: dword
+  // 111: DCACHE line
+  function automatic logic [CVA6Cfg.PLEN-1:0] paddrSizeAlign(input logic [CVA6Cfg.PLEN-1:0] paddr,
+                                                             input logic [2:0] size);
+    logic [CVA6Cfg.PLEN-1:0] out;
+    out = paddr;
+    unique case (size)
+      3'b001:  out[0:0] = '0;
+      3'b010:  out[1:0] = '0;
+      3'b011:  out[2:0] = '0;
+      3'b111:  out[CVA6Cfg.DCACHE_OFFSET_WIDTH-1:0] = '0;
+      default: ;
+    endcase
+    return out;
+  endfunction : paddrSizeAlign
+
+  // controller FSM
+  typedef enum logic [2:0] {
+    IDLE,
+    DRAIN,
+    AMO,
+    FLUSH,
+    STORE_WAIT,
+    LOAD_WAIT,
+    AMO_WAIT
+  } state_e;
+  state_e state_d, state_q;
+
+  // MSHR for reads
+  typedef struct packed {
+    logic [CVA6Cfg.PLEN-1:0]                     paddr;
+    logic [2:0]                                  size;
+    logic [CVA6Cfg.DCACHE_SET_ASSOC-1:0]         vld_bits;
+    logic [CVA6Cfg.MEM_TID_WIDTH-1:0]            id;
+    logic                                        nc;
+    logic [$clog2(CVA6Cfg.DCACHE_SET_ASSOC)-1:0] repl_way;
+    logic [$clog2(NumPorts)-1:0]                 miss_port_idx;
+  } mshr_t;
+
+  mshr_t mshr_d, mshr_q;
+  logic [$clog2(CVA6Cfg.DCACHE_SET_ASSOC)-1:0] repl_way, inv_way, rnd_way;
+  logic mshr_vld_d, mshr_vld_q, mshr_vld_q1;
+  logic mshr_allocate;
+  logic update_lfsr, all_ways_valid;
+
+  logic enable_d, enable_q;
+  logic flush_ack_d, flush_ack_q;
+  logic flush_en, flush_done;
+  logic mask_reads, lock_reqs;
+  logic amo_sel, miss_is_write;
+  logic amo_req_d, amo_req_q;
+  logic [63:0] amo_rtrn_mux;
+  logic [CVA6Cfg.XLEN-1:0] amo_data, amo_data_a, amo_data_b;
+  logic [CVA6Cfg.XLEN-1:0] amo_user;  //DCACHE USER ? CVA6Cfg.DCACHE_USER_WIDTH
+  logic [CVA6Cfg.PLEN-1:0] tmp_paddr;
+  logic [$clog2(NumPorts)-1:0] miss_port_idx;
+  logic [DCACHE_CL_IDX_WIDTH-1:0] cnt_d, cnt_q;
+  logic [NumPorts-1:0] miss_req_masked_d, miss_req_masked_q;
+
+  logic inv_vld, inv_vld_all, cl_write_en;
+  logic load_ack, store_ack, amo_ack;
+
+  logic [NumPorts-1:0] mshr_rdrd_collision_d, mshr_rdrd_collision_q;
+  logic [NumPorts-1:0] mshr_rdrd_collision;
+  logic tx_rdwr_collision, mshr_rdwr_collision;
+
+  ///////////////////////////////////////////////////////
+  // input arbitration and general control sigs
+  ///////////////////////////////////////////////////////
+
+  assign cache_en_o = enable_q;
+  assign cnt_d = (flush_en) ? cnt_q + 1 : '0;
+  assign flush_done = (cnt_q == CVA6Cfg.DCACHE_NUM_WORDS - 1);
+
+  assign miss_req_masked_d = (lock_reqs)  ? miss_req_masked_q      :
+                             (mask_reads) ? miss_we_i & miss_req_i : miss_req_i;
+  assign miss_is_write = miss_we_i[miss_port_idx];
+
+  // read port arbiter
+  lzc #(
+      .WIDTH(NumPorts)
+  ) i_lzc_reqs (
+      .in_i   (miss_req_masked_d),
+      .cnt_o  (miss_port_idx),
+      .empty_o()
+  );
+
+  always_comb begin : p_ack
+    miss_ack_o = '0;
+    if (!amo_sel) begin
+      miss_ack_o[miss_port_idx] = mem_data_ack_i & mem_data_req_o;
+    end
+  end
+
+  ///////////////////////////////////////////////////////
+  // MSHR and way replacement logic (only for read ops)
+  ///////////////////////////////////////////////////////
+
+  // find invalid cache line
+  lzc #(
+      .WIDTH(CVA6Cfg.DCACHE_SET_ASSOC)
+  ) i_lzc_inv (
+      .in_i   (~miss_vld_bits_i[miss_port_idx]),
+      .cnt_o  (inv_way),
+      .empty_o(all_ways_valid)
+  );
+
+  // generate random cacheline index
+  lfsr #(
+      .LfsrWidth(8),
+      .OutWidth (CVA6Cfg.DCACHE_SET_ASSOC_WIDTH)
+  ) i_lfsr_inv (
+      .clk_i (clk_i),
+      .rst_ni(rst_ni),
+      .en_i  (update_lfsr),
+      .out_o (rnd_way)
+  );
+
+  assign repl_way             = (all_ways_valid) ? rnd_way : inv_way;
+
+  assign mshr_d.size          = (mshr_allocate) ? miss_size_i[miss_port_idx] : mshr_q.size;
+  assign mshr_d.paddr         = (mshr_allocate) ? miss_paddr_i[miss_port_idx] : mshr_q.paddr;
+  assign mshr_d.vld_bits      = (mshr_allocate) ? miss_vld_bits_i[miss_port_idx] : mshr_q.vld_bits;
+  assign mshr_d.id            = (mshr_allocate) ? miss_id_i[miss_port_idx] : mshr_q.id;
+  assign mshr_d.nc            = (mshr_allocate) ? miss_nc_i[miss_port_idx] : mshr_q.nc;
+  assign mshr_d.repl_way      = (mshr_allocate) ? repl_way : mshr_q.repl_way;
+  assign mshr_d.miss_port_idx = (mshr_allocate) ? miss_port_idx : mshr_q.miss_port_idx;
+
+  // currently we only have one outstanding read TX, hence an incoming load clears the MSHR
+  assign mshr_vld_d           = (mshr_allocate) ? 1'b1 : (load_ack) ? 1'b0 : mshr_vld_q;
+
+  assign miss_o               = (mshr_allocate) ? ~miss_nc_i[miss_port_idx] : 1'b0;
+
+
+  for (genvar k = 0; k < NumPorts; k++) begin : gen_rdrd_collision
+    assign mshr_rdrd_collision[k]   = (mshr_q.paddr[CVA6Cfg.PLEN-1:CVA6Cfg.DCACHE_OFFSET_WIDTH] == miss_paddr_i[k][CVA6Cfg.PLEN-1:CVA6Cfg.DCACHE_OFFSET_WIDTH]) && (mshr_vld_q | mshr_vld_q1);
+    assign mshr_rdrd_collision_d[k] = (!miss_req_i[k]) ? 1'b0 : mshr_rdrd_collision_q[k] | mshr_rdrd_collision[k];
+  end
+
+  // read/write collision, stalls the corresponding request
+  // write port[NumPorts-1] collides with MSHR_Q
+  assign mshr_rdwr_collision = (mshr_q.paddr[CVA6Cfg.PLEN-1:CVA6Cfg.DCACHE_OFFSET_WIDTH] == miss_paddr_i[NumPorts-1][CVA6Cfg.PLEN-1:CVA6Cfg.DCACHE_OFFSET_WIDTH]) && mshr_vld_q;
+
+  // read collides with inflight TX
+  always_comb begin : p_tx_coll
+    tx_rdwr_collision = 1'b0;
+    for (int k = 0; k < CVA6Cfg.DCACHE_MAX_TX; k++) begin
+      tx_rdwr_collision |= (miss_paddr_i[miss_port_idx][CVA6Cfg.PLEN-1:CVA6Cfg.DCACHE_OFFSET_WIDTH] == tx_paddr_i[k][CVA6Cfg.PLEN-1:CVA6Cfg.DCACHE_OFFSET_WIDTH]) && tx_vld_i[k];
+    end
+  end
+
+  ///////////////////////////////////////////////////////
+  // to memory
+  ///////////////////////////////////////////////////////
+
+  // if size = 32bit word, select appropriate offset, replicate for openpiton...
+
+  if (CVA6Cfg.RVA) begin
+    if (CVA6Cfg.IS_XLEN64) begin : gen_amo_64b_data
+      assign amo_data_a = {amo_req_i.operand_b[0+:32], amo_req_i.operand_b[0+:32]};
+      assign amo_data_b = amo_req_i.operand_b;
+    end else begin : gen_amo_32b_data
+      assign amo_data_a = amo_req_i.operand_b[0+:32];
+    end
+  end
+
+  always_comb begin
+    if (CVA6Cfg.RVA) begin
+      if (CVA6Cfg.IS_XLEN64) begin
+        if (amo_req_i.size == 2'b10) begin
+          amo_data = amo_data_a;
+        end else begin
+          amo_data = amo_data_b;
+        end
+      end else begin
+        amo_data = amo_data_a;
+      end
+      if (CVA6Cfg.DATA_USER_EN) begin
+        amo_user = amo_data;
+      end else begin
+        amo_user = '0;
+      end
+    end
+  end
+
+  if (CVA6Cfg.RVA) begin
+    // note: openpiton returns a full cacheline!
+    if (CVA6Cfg.NOCType == config_pkg::NOC_TYPE_AXI4_ATOP) begin : gen_axi_rtrn_mux
+      if (CVA6Cfg.AxiDataWidth > 64) begin
+        assign amo_rtrn_mux = mem_rtrn_i.data[amo_req_i.operand_a[$clog2(
+            CVA6Cfg.AxiDataWidth/8
+        )-1:3]*64+:64];
+      end else begin
+        assign amo_rtrn_mux = mem_rtrn_i.data[0+:64];
+      end
+    end else begin : gen_piton_rtrn_mux
+      assign amo_rtrn_mux = mem_rtrn_i.data[amo_req_i.operand_a[CVA6Cfg.DCACHE_OFFSET_WIDTH-1:3]*64+:64];
+    end
+
+    // always sign extend 32bit values
+    assign amo_resp_o.result = (amo_req_i.size==2'b10) ? {{32{amo_rtrn_mux[amo_req_i.operand_a[2]*32 + 31]}},amo_rtrn_mux[amo_req_i.operand_a[2]*32 +: 32]} :
+                                                       amo_rtrn_mux ;
+    assign amo_req_d = amo_req_i.req;
+  end
+
+  // outgoing memory requests (AMOs are always uncached)
+  assign mem_data_o.tid = (CVA6Cfg.RVA && amo_sel) ? AmoTxId : miss_id_i[miss_port_idx];
+  assign mem_data_o.nc = (CVA6Cfg.RVA && amo_sel) ? 1'b1 : miss_nc_i[miss_port_idx];
+  assign mem_data_o.way = (CVA6Cfg.RVA && amo_sel) ? '0 : repl_way;
+  assign mem_data_o.data = (CVA6Cfg.RVA && amo_sel) ? amo_data : miss_wdata_i[miss_port_idx];
+  assign mem_data_o.user = (CVA6Cfg.RVA && amo_sel) ? amo_user : miss_wuser_i[miss_port_idx];
+  assign mem_data_o.size   = (CVA6Cfg.RVA && amo_sel) ? {1'b0, amo_req_i.size} : miss_size_i [miss_port_idx];
+  assign mem_data_o.amo_op = (CVA6Cfg.RVA && amo_sel) ? amo_req_i.amo_op : AMO_NONE;
+
+  assign tmp_paddr         = (CVA6Cfg.RVA && amo_sel) ? amo_req_i.operand_a[CVA6Cfg.PLEN-1:0] : miss_paddr_i[miss_port_idx];
+  assign mem_data_o.paddr = paddrSizeAlign(tmp_paddr, mem_data_o.size);
+
+  ///////////////////////////////////////////////////////
+  // back-off mechanism for LR/SC completion guarantee
+  ///////////////////////////////////////////////////////
+
+  logic sc_fail, sc_pass, sc_backoff_over;
+  exp_backoff #(
+      .Seed  (3),
+      .MaxExp(16)
+  ) i_exp_backoff (
+      .clk_i,
+      .rst_ni,
+      .set_i    (sc_fail),
+      .clr_i    (sc_pass),
+      .is_zero_o(sc_backoff_over)
+  );
+
+  ///////////////////////////////////////////////////////
+  // responses from memory
+  ///////////////////////////////////////////////////////
+
+  // keep track of pending stores
+  logic store_sent;
+  logic [$clog2(CVA6Cfg.DCACHE_MAX_TX + 1)-1:0] stores_inflight_d, stores_inflight_q;
+  assign store_sent = mem_data_req_o & mem_data_ack_i & (mem_data_o.rtype == DCACHE_STORE_REQ);
+
+  assign stores_inflight_d = (store_ack && store_sent) ? stores_inflight_q     :
+                             (store_ack)               ? stores_inflight_q - 1 :
+                             (store_sent)              ? stores_inflight_q + 1 :
+                                                         stores_inflight_q;
+
+  // incoming responses
+  always_comb begin : p_rtrn_logic
+    load_ack        = 1'b0;
+    store_ack       = 1'b0;
+    amo_ack         = 1'b0;
+    inv_vld         = 1'b0;
+    inv_vld_all     = 1'b0;
+    sc_fail         = 1'b0;
+    sc_pass         = 1'b0;
+    miss_rtrn_vld_o = '0;
+    if (mem_rtrn_vld_i) begin
+      unique case (mem_rtrn_i.rtype)
+        DCACHE_LOAD_ACK: begin
+          if (mshr_vld_q) begin
+            load_ack = 1'b1;
+            miss_rtrn_vld_o[mshr_q.miss_port_idx] = 1'b1;
+          end
+        end
+        DCACHE_STORE_ACK: begin
+          if (stores_inflight_q > 0) begin
+            store_ack = 1'b1;
+            miss_rtrn_vld_o[NumPorts-1] = 1'b1;
+          end
+        end
+        DCACHE_ATOMIC_ACK: begin
+          if (CVA6Cfg.RVA) begin
+            if (amo_req_q) begin
+              amo_ack = 1'b1;
+              // need to set SC backoff counter if
+              // this op failed
+              if (amo_req_i.amo_op == AMO_SC) begin
+                if (amo_resp_o.result > 0) begin
+                  sc_fail = 1'b1;
+                end else begin
+                  sc_pass = 1'b1;
+                end
+              end
+            end
+          end
+        end
+        DCACHE_INV_REQ: begin
+          inv_vld     = mem_rtrn_i.inv.vld | mem_rtrn_i.inv.all;
+          inv_vld_all = mem_rtrn_i.inv.all;
+        end
+        // TODO:
+        // DCACHE_INT_REQ: begin
+        // end
+        default: begin
+        end
+      endcase
+    end
+  end
+
+  // to write buffer
+  assign miss_rtrn_id_o = mem_rtrn_i.tid;
+
+  ///////////////////////////////////////////////////////
+  // writes to cache memory
+  ///////////////////////////////////////////////////////
+
+  // cacheline write port
+  assign wr_cl_nc_o = mshr_q.nc;
+  assign wr_cl_vld_o = load_ack | (|wr_cl_we_o);
+
+  assign wr_cl_we_o = (flush_en) ? '1 : (inv_vld_all) ? '1 : (inv_vld) ? dcache_way_bin2oh(
+      mem_rtrn_i.inv.way
+  ) : (cl_write_en) ? dcache_way_bin2oh(
+      mshr_q.repl_way
+  ) : '0;
+
+  assign wr_vld_bits_o = (flush_en) ? '0 : (inv_vld) ? '0 : (cl_write_en) ? dcache_way_bin2oh(
+      mshr_q.repl_way
+  ) : '0;
+
+  assign wr_cl_idx_o     = (flush_en) ? cnt_q                                                        :
+                           (inv_vld)  ? mem_rtrn_i.inv.idx[CVA6Cfg.DCACHE_INDEX_WIDTH-1:CVA6Cfg.DCACHE_OFFSET_WIDTH] :
+                                        mshr_q.paddr[CVA6Cfg.DCACHE_INDEX_WIDTH-1:CVA6Cfg.DCACHE_OFFSET_WIDTH];
+
+  assign wr_cl_tag_o = mshr_q.paddr[CVA6Cfg.DCACHE_TAG_WIDTH+CVA6Cfg.DCACHE_INDEX_WIDTH-1:CVA6Cfg.DCACHE_INDEX_WIDTH];
+  assign wr_cl_off_o = mshr_q.paddr[CVA6Cfg.DCACHE_OFFSET_WIDTH-1:0];
+  assign wr_cl_data_o = mem_rtrn_i.data;
+  assign wr_cl_user_o = mem_rtrn_i.user;
+  assign wr_cl_data_be_o = (cl_write_en) ? '1 : '0;// we only write complete cachelines into the memory
+
+  // only non-NC responses write to the cache
+  assign cl_write_en = load_ack & ~mshr_q.nc;
+
+  ///////////////////////////////////////////////////////
+  // main control logic for generating tx
+  ///////////////////////////////////////////////////////
+
+  always_comb begin : p_fsm
+    // default assignment
+    state_d          = state_q;
+
+    flush_ack_o      = 1'b0;
+    mem_data_o.rtype = DCACHE_LOAD_REQ;
+    mem_data_req_o   = 1'b0;
+    amo_resp_o.ack   = 1'b0;
+    miss_replay_o    = '0;
+
+    // disabling cache is possible anytime, enabling goes via flush
+    enable_d         = enable_q & enable_i;
+    flush_ack_d      = flush_ack_q;
+    flush_en         = 1'b0;
+    amo_sel          = 1'b0;
+    update_lfsr      = 1'b0;
+    mshr_allocate    = 1'b0;
+    lock_reqs        = 1'b0;
+    mask_reads       = mshr_vld_q;
+
+    // interfaces
+    unique case (state_q)
+      //////////////////////////////////
+      // wait for misses / amo ops
+      IDLE: begin
+        if (flush_i || (enable_i && !enable_q)) begin
+          if (wbuffer_empty_i && !mshr_vld_q) begin
+            flush_ack_d = flush_i;
+            state_d     = FLUSH;
+          end else begin
+            state_d = DRAIN;
+          end
+        end else if (CVA6Cfg.RVA && amo_req_i.req) begin
+          if (wbuffer_empty_i && !mshr_vld_q) begin
+            state_d = AMO;
+          end else begin
+            state_d = DRAIN;
+          end
+          // we've got a miss to handle
+        end else if (|miss_req_masked_d) begin
+          // this is a write miss, just pass through (but check whether write collides with MSHR)
+          if (miss_is_write) begin
+            // stall in case this write collides with the MSHR address
+            if (!mshr_rdwr_collision) begin
+              mem_data_req_o   = 1'b1;
+              mem_data_o.rtype = DCACHE_STORE_REQ;
+              if (!mem_data_ack_i) begin
+                state_d = STORE_WAIT;
+              end
+            end
+            // this is a read miss, can only allocate 1 MSHR
+            // in case of a load_ack we can accept a new miss, since the MSHR is being cleared
+          end else if (!mshr_vld_q || load_ack) begin
+            // replay the read request in case the address has collided with MSHR during the time the request was pending
+            // i.e., the cache state may have been updated in the mean time due to a refill at the same CL address
+            if (mshr_rdrd_collision_d[miss_port_idx]) begin
+              miss_replay_o[miss_port_idx] = 1'b1;
+              // stall in case this CL address overlaps with a write TX that is in flight
+            end else if (!tx_rdwr_collision) begin
+              mem_data_req_o   = 1'b1;
+              mem_data_o.rtype = DCACHE_LOAD_REQ;
+              update_lfsr      = all_ways_valid & mem_data_ack_i;  // need to evict a random way
+              mshr_allocate    = mem_data_ack_i;
+              if (!mem_data_ack_i) begin
+                state_d = LOAD_WAIT;
+              end
+            end
+          end
+        end
+      end
+      //////////////////////////////////
+      // wait until this request is acked
+      STORE_WAIT: begin
+        lock_reqs        = 1'b1;
+        mem_data_req_o   = 1'b1;
+        mem_data_o.rtype = DCACHE_STORE_REQ;
+        if (mem_data_ack_i) begin
+          state_d = IDLE;
+        end
+      end
+      //////////////////////////////////
+      // wait until this request is acked
+      LOAD_WAIT: begin
+        lock_reqs        = 1'b1;
+        mem_data_req_o   = 1'b1;
+        mem_data_o.rtype = DCACHE_LOAD_REQ;
+        if (mem_data_ack_i) begin
+          update_lfsr   = all_ways_valid;  // need to evict a random way
+          mshr_allocate = 1'b1;
+          state_d       = IDLE;
+        end
+      end
+      //////////////////////////////////
+      // only handle stores, do not accept new read requests
+      // wait until MSHR is cleared and wbuffer is empty
+      DRAIN: begin
+        mask_reads = 1'b1;
+        // these are writes, check whether they collide with MSHR
+        if (|miss_req_masked_d && !mshr_rdwr_collision) begin
+          mem_data_req_o   = 1'b1;
+          mem_data_o.rtype = DCACHE_STORE_REQ;
+        end
+
+        if (wbuffer_empty_i && !mshr_vld_q) begin
+          state_d = IDLE;
+        end
+      end
+      //////////////////////////////////
+      // flush the cache
+      FLUSH: begin
+        // internal flush signal
+        flush_en = 1'b1;
+        if (flush_done) begin
+          state_d     = IDLE;
+          flush_ack_o = flush_ack_q;
+          flush_ack_d = 1'b0;
+          enable_d    = enable_i;
+        end
+      end
+      //////////////////////////////////
+      // send out amo op request
+      AMO: begin
+        if (CVA6Cfg.RVA) begin
+          mem_data_o.rtype = DCACHE_ATOMIC_REQ;
+          amo_sel          = 1'b1;
+          // if this is an LR, we need to consult the backoff counter
+          if ((amo_req_i.amo_op != AMO_LR) || sc_backoff_over) begin
+            mem_data_req_o = 1'b1;
+            if (mem_data_ack_i) begin
+              state_d = AMO_WAIT;
+            end
+          end
+        end
+      end
+      //////////////////////////////////
+      // block and wait until AMO OP returns
+      AMO_WAIT: begin
+        if (CVA6Cfg.RVA) begin
+          amo_sel = 1'b1;
+          if (amo_ack) begin
+            amo_resp_o.ack = 1'b1;
+            state_d        = IDLE;
+          end
+        end
+      end
+      //////////////////////////////////
+      default: begin
+        // we should never get here
+        state_d = IDLE;
+      end
+    endcase  // state_q
+  end
+
+  ///////////////////////////////////////////////////////
+  // ff's
+  ///////////////////////////////////////////////////////
+
+  always_ff @(posedge clk_i or negedge rst_ni) begin : p_regs
+    if (!rst_ni) begin
+      state_q               <= FLUSH;
+      cnt_q                 <= '0;
+      enable_q              <= '0;
+      flush_ack_q           <= '0;
+      mshr_vld_q            <= '0;
+      mshr_vld_q1           <= '0;
+      mshr_q                <= '0;
+      mshr_rdrd_collision_q <= '0;
+      miss_req_masked_q     <= '0;
+      amo_req_q             <= '0;
+      stores_inflight_q     <= '0;
+    end else begin
+      state_q               <= state_d;
+      cnt_q                 <= cnt_d;
+      enable_q              <= enable_d;
+      flush_ack_q           <= flush_ack_d;
+      mshr_vld_q            <= mshr_vld_d;
+      mshr_vld_q1           <= mshr_vld_q;
+      mshr_q                <= mshr_d;
+      mshr_rdrd_collision_q <= mshr_rdrd_collision_d;
+      miss_req_masked_q     <= miss_req_masked_d;
+      amo_req_q             <= amo_req_d;
+      stores_inflight_q     <= stores_inflight_d;
+    end
+  end
+
+  ///////////////////////////////////////////////////////
+  // assertions
+  ///////////////////////////////////////////////////////
+
+  //pragma translate_off
+`ifndef VERILATOR
+
+  read_tid :
+  assert property (
+    @(posedge clk_i) disable iff (!rst_ni) mshr_vld_q |-> mem_rtrn_vld_i |-> load_ack |-> mem_rtrn_i.tid == mshr_q.id)
+  else $fatal(1, "[l1 dcache missunit] TID of load response doesn't match");
+
+  read_ports :
+  assert property (
+    @(posedge clk_i) disable iff (!rst_ni) |miss_req_i[NumPorts-2:0] |-> miss_we_i[NumPorts-2:0] == 0)
+  else $fatal(1, "[l1 dcache missunit] only last port can issue write requests");
+
+  write_port :
+  assert property (
+    @(posedge clk_i) disable iff (!rst_ni) miss_req_i[NumPorts-1] |-> miss_we_i[NumPorts-1])
+  else $fatal(1, "[l1 dcache missunit] last port can only issue write requests");
+
+  initial begin
+    // assert wrong parameterizations
+    assert (NumPorts >= 2)
+    else
+      $fatal(
+          1, "[l1 dcache missunit] at least two ports are required (one read port, one write port)"
+      );
+  end
+`endif
+  //pragma translate_on
+
+endmodule  // wt_dcache_missunit
+// Copyright 2018 ETH Zurich and University of Bologna.
+// Copyright and related rights are licensed under the Solderpad Hardware
+// License, Version 0.51 (the "License"); you may not use this file except in
+// compliance with the License.  You may obtain a copy of the License at
+// http://solderpad.org/licenses/SHL-0.51. Unless required by applicable law
+// or agreed to in writing, software, hardware and materials distributed under
+// this License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
+// CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+// Author: Michael Schaffner <schaffner@iis.ee.ethz.ch>, ETH Zurich
+// Date: 13.09.2018
+// Description: Memory arrays, arbiter and tag comparison for WT dcache.
+//
+//
+// Notes: 1) all ports can trigger a readout of all ways, and the way where the tag hits is selected
+//
+//        2) only port0 can write full cache lines. higher ports are read only. also, port0 can only read the tag array,
+//           and does not trigger a cache line readout.
+//
+//        3) the single word write port is a separate port without access to the tag memory.
+//           these single word writes can interleave with read operations if they go to different
+//           cacheline offsets, since each word offset is placed into a different SRAM bank.
+//
+//        4) Read ports with same priority are RR arbited. but high prio ports (rd_prio_i[port_nr] = '1b1) will stall
+//           low prio ports (rd_prio_i[port_nr] = '1b0)
+
+
+module wt_dcache_mem
+  import ariane_pkg::*;
+  import wt_cache_pkg::*;
+#(
+    parameter config_pkg::cva6_cfg_t CVA6Cfg             = config_pkg::cva6_cfg_empty,
+    parameter                        DCACHE_CL_IDX_WIDTH = 0,
+    parameter type                   wbuffer_t           = logic,
+    parameter int unsigned           NumPorts            = 3
+) (
+    input logic clk_i,
+    input logic rst_ni,
+
+    // ports
+    input logic [NumPorts-1:0][CVA6Cfg.DCACHE_TAG_WIDTH-1:0] rd_tag_i,  // tag in - comes one cycle later
+    input logic [NumPorts-1:0][DCACHE_CL_IDX_WIDTH-1:0] rd_idx_i,
+    input logic [NumPorts-1:0][CVA6Cfg.DCACHE_OFFSET_WIDTH-1:0] rd_off_i,
+    input logic [NumPorts-1:0] rd_req_i,  // read the word at offset off_i[:3] in all ways
+    input  logic  [NumPorts-1:0]                              rd_tag_only_i,      // only do a tag/valid lookup, no access to data arrays
+    input logic [NumPorts-1:0] rd_prio_i,  // 0: low prio, 1: high prio
+    output logic [NumPorts-1:0] rd_ack_o,
+    output logic [CVA6Cfg.DCACHE_SET_ASSOC-1:0] rd_vld_bits_o,
+    output logic [CVA6Cfg.DCACHE_SET_ASSOC-1:0] rd_hit_oh_o,
+    output logic [CVA6Cfg.XLEN-1:0] rd_data_o,
+    output logic [CVA6Cfg.DCACHE_USER_WIDTH-1:0] rd_user_o,
+
+    // only available on port 0, uses address signals of port 0
+    input logic                                      wr_cl_vld_i,
+    input logic                                      wr_cl_nc_i,       // noncacheable access
+    input logic [      CVA6Cfg.DCACHE_SET_ASSOC-1:0] wr_cl_we_i,       // writes a full cacheline
+    input logic [      CVA6Cfg.DCACHE_TAG_WIDTH-1:0] wr_cl_tag_i,
+    input logic [           DCACHE_CL_IDX_WIDTH-1:0] wr_cl_idx_i,
+    input logic [   CVA6Cfg.DCACHE_OFFSET_WIDTH-1:0] wr_cl_off_i,
+    input logic [     CVA6Cfg.DCACHE_LINE_WIDTH-1:0] wr_cl_data_i,
+    input logic [CVA6Cfg.DCACHE_USER_LINE_WIDTH-1:0] wr_cl_user_i,
+    input logic [   CVA6Cfg.DCACHE_LINE_WIDTH/8-1:0] wr_cl_data_be_i,
+    input logic [      CVA6Cfg.DCACHE_SET_ASSOC-1:0] wr_vld_bits_i,
+
+    // separate port for single word write, no tag access
+    input logic [CVA6Cfg.DCACHE_SET_ASSOC-1:0] wr_req_i,  // write a single word to offset off_i[:3]
+    output logic wr_ack_o,
+    input logic [DCACHE_CL_IDX_WIDTH-1:0] wr_idx_i,
+    input logic [CVA6Cfg.DCACHE_OFFSET_WIDTH-1:0] wr_off_i,
+    input logic [CVA6Cfg.XLEN-1:0] wr_data_i,
+    input logic [CVA6Cfg.DCACHE_USER_WIDTH-1:0] wr_user_i,
+    input logic [(CVA6Cfg.XLEN/8)-1:0] wr_data_be_i,
+
+    // forwarded wbuffer
+    input wbuffer_t [CVA6Cfg.WtDcacheWbufDepth-1:0] wbuffer_data_i
+);
+
+  localparam DCACHE_NUM_BANKS = CVA6Cfg.DCACHE_LINE_WIDTH / CVA6Cfg.XLEN;
+  localparam DCACHE_NUM_BANKS_WIDTH = $clog2(DCACHE_NUM_BANKS);
+
+  // functions
+  function automatic logic [DCACHE_NUM_BANKS-1:0] dcache_cl_bin2oh(
+      input logic [DCACHE_NUM_BANKS_WIDTH-1:0] in);
+    logic [DCACHE_NUM_BANKS-1:0] out;
+    out     = '0;
+    out[in] = 1'b1;
+    return out;
+  endfunction
+
+  // number of bits needed to address AXI data. If AxiDataWidth equals CVA6Cfg.XLEN this parameter
+  // is not needed. Therefore, increment it by one to avoid reverse range select during elaboration.
+  localparam AXI_OFFSET_WIDTH = CVA6Cfg.AxiDataWidth == CVA6Cfg.XLEN ? $clog2(
+      CVA6Cfg.AxiDataWidth / 8
+  ) + 1 : $clog2(
+      CVA6Cfg.AxiDataWidth / 8
+  );
+
+  logic [DCACHE_NUM_BANKS-1:0]                                                     bank_req;
+  logic [DCACHE_NUM_BANKS-1:0]                                                     bank_we;
+  logic [DCACHE_NUM_BANKS-1:0][CVA6Cfg.DCACHE_SET_ASSOC-1:0][(CVA6Cfg.XLEN/8)-1:0] bank_be;
+  logic [DCACHE_NUM_BANKS-1:0][     DCACHE_CL_IDX_WIDTH-1:0]                       bank_idx;
+  logic [DCACHE_CL_IDX_WIDTH-1:0] bank_idx_d, bank_idx_q;
+  logic [CVA6Cfg.DCACHE_OFFSET_WIDTH-1:0] bank_off_d, bank_off_q;
+
+  logic [DCACHE_NUM_BANKS-1:0][CVA6Cfg.DCACHE_SET_ASSOC-1:0][CVA6Cfg.XLEN-1:0] bank_wdata;  //
+  logic [DCACHE_NUM_BANKS-1:0][CVA6Cfg.DCACHE_SET_ASSOC-1:0][CVA6Cfg.XLEN-1:0] bank_rdata;  //
+  logic [CVA6Cfg.DCACHE_SET_ASSOC-1:0][CVA6Cfg.XLEN-1:0] rdata_cl;  // selected word from each cacheline
+  logic [DCACHE_NUM_BANKS-1:0][CVA6Cfg.DCACHE_SET_ASSOC-1:0][CVA6Cfg.DCACHE_USER_WIDTH-1:0] bank_wuser;  //
+  logic [DCACHE_NUM_BANKS-1:0][CVA6Cfg.DCACHE_SET_ASSOC-1:0][CVA6Cfg.DCACHE_USER_WIDTH-1:0] bank_ruser;  //
+  logic [CVA6Cfg.DCACHE_SET_ASSOC-1:0][CVA6Cfg.DCACHE_USER_WIDTH-1:0]                      ruser_cl;          // selected word from each cacheline
+
+  logic [CVA6Cfg.DCACHE_TAG_WIDTH-1:0] rd_tag;
+  logic [CVA6Cfg.DCACHE_SET_ASSOC-1:0] vld_req;  // bit enable for valid regs
+  logic vld_we;  // valid bits write enable
+  logic [CVA6Cfg.DCACHE_SET_ASSOC-1:0] vld_wdata;  // valid bits to write
+  logic [CVA6Cfg.DCACHE_SET_ASSOC-1:0][CVA6Cfg.DCACHE_TAG_WIDTH-1:0]            tag_rdata;                    // these are the tags coming from the tagmem
+  logic [DCACHE_CL_IDX_WIDTH-1:0] vld_addr;  // valid bit
+
+  logic [$clog2(NumPorts)-1:0] vld_sel_d, vld_sel_q;
+
+  logic [CVA6Cfg.WtDcacheWbufDepth-1:0] wbuffer_hit_oh;
+  logic [(CVA6Cfg.XLEN/8)-1:0] wbuffer_be;
+  logic [CVA6Cfg.XLEN-1:0] wbuffer_rdata, rdata;
+  logic [CVA6Cfg.DCACHE_USER_WIDTH-1:0] wbuffer_ruser, ruser;
+  logic [CVA6Cfg.PLEN-1:0] wbuffer_cmp_addr;
+
+  logic cmp_en_d, cmp_en_q;
+  logic rd_acked;
+  logic [NumPorts-1:0] bank_collision, rd_req_masked, rd_req_prio;
+
+  ///////////////////////////////////////////////////////
+  // arbiter
+  ///////////////////////////////////////////////////////
+
+  // Priority is highest for lowest read port index
+  //
+  // SRAM bank mapping:
+  //
+  // Bank 0                   Bank 2
+  // [way0, w0] [way1, w0] .. [way0, w1] [way1, w1] ..
+
+  // byte enable mapping
+  for (genvar k = 0; k < DCACHE_NUM_BANKS; k++) begin : gen_bank
+    for (genvar j = 0; j < CVA6Cfg.DCACHE_SET_ASSOC; j++) begin : gen_bank_way
+      assign bank_be[k][j]   = (wr_cl_we_i[j] & wr_cl_vld_i)  ? wr_cl_data_be_i[k*(CVA6Cfg.XLEN/8) +: (CVA6Cfg.XLEN/8)] :
+                               (wr_req_i[j]   & wr_ack_o)     ? wr_data_be_i              :
+                                                                '0;
+      assign bank_wdata[k][j] = (wr_cl_we_i[j] & wr_cl_vld_i) ?  wr_cl_data_i[k*CVA6Cfg.XLEN +: CVA6Cfg.XLEN] :
+                                                                 wr_data_i;
+      assign bank_wuser[k][j] = (wr_cl_we_i[j] & wr_cl_vld_i) ?  wr_cl_user_i[k*CVA6Cfg.DCACHE_USER_WIDTH +: CVA6Cfg.DCACHE_USER_WIDTH] :
+                                                                 wr_user_i;
+    end
+  end
+
+  assign vld_wdata     = wr_vld_bits_i;
+  assign vld_addr      = (wr_cl_vld_i) ? wr_cl_idx_i : rd_idx_i[vld_sel_d];
+  assign rd_tag        = rd_tag_i[vld_sel_q];  //delayed by one cycle
+  assign bank_off_d    = (wr_cl_vld_i) ? wr_cl_off_i : rd_off_i[vld_sel_d];
+  assign bank_idx_d    = (wr_cl_vld_i) ? wr_cl_idx_i : rd_idx_i[vld_sel_d];
+  assign vld_req       = (wr_cl_vld_i) ? wr_cl_we_i : (rd_acked) ? '1 : '0;
+
+
+  // priority masking
+  // disable low prio requests when any of the high prio reqs is present
+  assign rd_req_prio   = rd_req_i & rd_prio_i;
+  assign rd_req_masked = (|rd_req_prio) ? rd_req_prio : rd_req_i;
+
+  logic rd_req;
+  rr_arb_tree #(
+      .NumIn    (NumPorts),
+      .DataWidth(1)
+  ) i_rr_arb_tree (
+      .clk_i  (clk_i),
+      .rst_ni (rst_ni),
+      .flush_i('0),
+      .rr_i   ('0),
+      .req_i  (rd_req_masked),
+      .gnt_o  (rd_ack_o),
+      .data_i ('0),
+      .gnt_i  (~wr_cl_vld_i),
+      .req_o  (rd_req),
+      .data_o (),
+      .idx_o  (vld_sel_d)
+  );
+
+  assign rd_acked = rd_req & ~wr_cl_vld_i;
+
+  always_comb begin : p_bank_req
+    vld_we   = wr_cl_vld_i;
+    bank_req = '0;
+    wr_ack_o = '0;
+    bank_we  = '0;
+    bank_idx = '{default: wr_idx_i};
+
+    for (int k = 0; k < NumPorts; k++) begin
+      bank_collision[k] = rd_off_i[k][CVA6Cfg.DCACHE_OFFSET_WIDTH-1:CVA6Cfg.XLEN_ALIGN_BYTES] == wr_off_i[CVA6Cfg.DCACHE_OFFSET_WIDTH-1:CVA6Cfg.XLEN_ALIGN_BYTES];
+    end
+
+    if (wr_cl_vld_i & |wr_cl_we_i) begin
+      bank_req = '1;
+      bank_we  = '1;
+      bank_idx = '{default: wr_cl_idx_i};
+    end else begin
+      if (rd_acked) begin
+        if (!rd_tag_only_i[vld_sel_d]) begin
+          bank_req = dcache_cl_bin2oh(
+              rd_off_i[vld_sel_d][CVA6Cfg.DCACHE_OFFSET_WIDTH-1:CVA6Cfg.XLEN_ALIGN_BYTES]);
+          bank_idx[rd_off_i[vld_sel_d][CVA6Cfg.DCACHE_OFFSET_WIDTH-1:CVA6Cfg.XLEN_ALIGN_BYTES]] = rd_idx_i[vld_sel_d];
+        end
+      end
+
+      if (|wr_req_i) begin
+        if (rd_tag_only_i[vld_sel_d] || !(rd_ack_o[vld_sel_d] && bank_collision[vld_sel_d])) begin
+          wr_ack_o = 1'b1;
+          bank_req |= dcache_cl_bin2oh(
+              wr_off_i[CVA6Cfg.DCACHE_OFFSET_WIDTH-1:CVA6Cfg.XLEN_ALIGN_BYTES]
+          );
+          bank_we =
+              dcache_cl_bin2oh(wr_off_i[CVA6Cfg.DCACHE_OFFSET_WIDTH-1:CVA6Cfg.XLEN_ALIGN_BYTES]);
+        end
+      end
+    end
+  end
+
+  ///////////////////////////////////////////////////////
+  // tag comparison, hit generatio, readoud muxes
+  ///////////////////////////////////////////////////////
+
+  logic [CVA6Cfg.DCACHE_OFFSET_WIDTH-CVA6Cfg.XLEN_ALIGN_BYTES-1:0] wr_cl_off;
+  logic [CVA6Cfg.DCACHE_OFFSET_WIDTH-CVA6Cfg.XLEN_ALIGN_BYTES-1:0] wr_cl_nc_off;
+  logic [                   $clog2(CVA6Cfg.WtDcacheWbufDepth)-1:0] wbuffer_hit_idx;
+  logic [                    $clog2(CVA6Cfg.DCACHE_SET_ASSOC)-1:0] rd_hit_idx;
+
+  assign cmp_en_d = (|vld_req) & ~vld_we;
+
+  // word tag comparison in write buffer
+  assign wbuffer_cmp_addr = (wr_cl_vld_i) ? {wr_cl_tag_i, wr_cl_idx_i, wr_cl_off_i} :
+                                            {rd_tag, bank_idx_q, bank_off_q};
+  // hit generation
+  for (genvar i = 0; i < CVA6Cfg.DCACHE_SET_ASSOC; i++) begin : gen_tag_cmpsel
+    // tag comparison of ways >0
+    assign rd_hit_oh_o[i] = (rd_tag == tag_rdata[i]) & rd_vld_bits_o[i] & cmp_en_q;
+    // byte offset mux of ways >0
+    assign rdata_cl[i] = bank_rdata[bank_off_q[CVA6Cfg.DCACHE_OFFSET_WIDTH-1:CVA6Cfg.XLEN_ALIGN_BYTES]][i];
+    assign ruser_cl[i] = bank_ruser[bank_off_q[CVA6Cfg.DCACHE_OFFSET_WIDTH-1:CVA6Cfg.XLEN_ALIGN_BYTES]][i];
+  end
+
+  for (genvar k = 0; k < CVA6Cfg.WtDcacheWbufDepth; k++) begin : gen_wbuffer_hit
+    assign wbuffer_hit_oh[k] = (|wbuffer_data_i[k].valid) & ({{CVA6Cfg.XLEN_ALIGN_BYTES{1'b0}}, wbuffer_data_i[k].wtag} == (wbuffer_cmp_addr >> CVA6Cfg.XLEN_ALIGN_BYTES));
+  end
+
+  lzc #(
+      .WIDTH(CVA6Cfg.WtDcacheWbufDepth)
+  ) i_lzc_wbuffer_hit (
+      .in_i   (wbuffer_hit_oh),
+      .cnt_o  (wbuffer_hit_idx),
+      .empty_o()
+  );
+
+  lzc #(
+      .WIDTH(CVA6Cfg.DCACHE_SET_ASSOC)
+  ) i_lzc_rd_hit (
+      .in_i   (rd_hit_oh_o),
+      .cnt_o  (rd_hit_idx),
+      .empty_o()
+  );
+
+  assign wbuffer_rdata = wbuffer_data_i[wbuffer_hit_idx].data;
+  assign wbuffer_ruser = wbuffer_data_i[wbuffer_hit_idx].user;
+  assign wbuffer_be    = (|wbuffer_hit_oh) ? wbuffer_data_i[wbuffer_hit_idx].valid : '0;
+
+  if (CVA6Cfg.NOCType == config_pkg::NOC_TYPE_AXI4_ATOP) begin : gen_axi_offset
+    // In case of an uncached read, return the desired CVA6Cfg.XLEN-bit segment of the most recent AXI read
+    assign wr_cl_off     = (wr_cl_nc_i) ? (CVA6Cfg.AxiDataWidth == CVA6Cfg.XLEN) ? '0 :
+                              {{CVA6Cfg.DCACHE_OFFSET_WIDTH-AXI_OFFSET_WIDTH{1'b0}}, wr_cl_off_i[AXI_OFFSET_WIDTH-1:CVA6Cfg.XLEN_ALIGN_BYTES]} :
+                              wr_cl_off_i[CVA6Cfg.DCACHE_OFFSET_WIDTH-1:CVA6Cfg.XLEN_ALIGN_BYTES];
+  end else begin : gen_piton_offset
+    assign wr_cl_off = wr_cl_off_i[CVA6Cfg.DCACHE_OFFSET_WIDTH-1:3];
+  end
+
+  always_comb begin
+    if (wr_cl_vld_i) begin
+      rdata = wr_cl_data_i[wr_cl_off*CVA6Cfg.XLEN+:CVA6Cfg.XLEN];
+      ruser = wr_cl_user_i[wr_cl_off*CVA6Cfg.DCACHE_USER_WIDTH+:CVA6Cfg.DCACHE_USER_WIDTH];
+    end else begin
+      rdata = rdata_cl[rd_hit_idx];
+      ruser = ruser_cl[rd_hit_idx];
+    end
+  end
+
+  // overlay bytes that hit in the write buffer
+  for (genvar k = 0; k < (CVA6Cfg.XLEN / 8); k++) begin : gen_rd_data
+    assign rd_data_o[8*k+:8] = (wbuffer_be[k]) ? wbuffer_rdata[8*k+:8] : rdata[8*k+:8];
+  end
+  for (genvar k = 0; k < CVA6Cfg.DCACHE_USER_WIDTH / 8; k++) begin : gen_rd_user
+    assign rd_user_o[8*k+:8] = (wbuffer_be[k]) ? wbuffer_ruser[8*k+:8] : ruser[8*k+:8];
+  end
+
+  ///////////////////////////////////////////////////////
+  // memory arrays and regs
+  ///////////////////////////////////////////////////////
+
+  logic [CVA6Cfg.DCACHE_TAG_WIDTH:0] vld_tag_rdata[CVA6Cfg.DCACHE_SET_ASSOC-1:0];
+
+  for (genvar k = 0; k < DCACHE_NUM_BANKS; k++) begin : gen_data_banks
+    // Data RAM
+    sram_cache #(
+        .USER_WIDTH (CVA6Cfg.DCACHE_SET_ASSOC * CVA6Cfg.DCACHE_USER_WIDTH),
+        .DATA_WIDTH (CVA6Cfg.DCACHE_SET_ASSOC * CVA6Cfg.XLEN),
+        .USER_EN    (CVA6Cfg.DATA_USER_EN),
+        .BYTE_ACCESS(1),
+        .TECHNO_CUT (CVA6Cfg.TechnoCut),
+        .NUM_WORDS  (CVA6Cfg.DCACHE_NUM_WORDS)
+    ) i_data_sram (
+        .clk_i  (clk_i),
+        .rst_ni (rst_ni),
+        .req_i  (bank_req[k]),
+        .we_i   (bank_we[k]),
+        .addr_i (bank_idx[k]),
+        .wuser_i(bank_wuser[k]),
+        .wdata_i(bank_wdata[k]),
+        .be_i   (bank_be[k]),
+        .ruser_o(bank_ruser[k]),
+        .rdata_o(bank_rdata[k])
+    );
+  end
+
+  for (genvar i = 0; i < CVA6Cfg.DCACHE_SET_ASSOC; i++) begin : gen_tag_srams
+
+    assign tag_rdata[i]     = vld_tag_rdata[i][CVA6Cfg.DCACHE_TAG_WIDTH-1:0];
+    assign rd_vld_bits_o[i] = vld_tag_rdata[i][CVA6Cfg.DCACHE_TAG_WIDTH];
+
+    // Tag RAM
+    sram_cache #(
+        // tag + valid bit
+        .DATA_WIDTH (CVA6Cfg.DCACHE_TAG_WIDTH + 1),
+        .BYTE_ACCESS(0),
+        .TECHNO_CUT (CVA6Cfg.TechnoCut),
+        .NUM_WORDS  (CVA6Cfg.DCACHE_NUM_WORDS)
+    ) i_tag_sram (
+        .clk_i  (clk_i),
+        .rst_ni (rst_ni),
+        .req_i  (vld_req[i]),
+        .we_i   (vld_we),
+        .addr_i (vld_addr),
+        .wuser_i('0),
+        .wdata_i({vld_wdata[i], wr_cl_tag_i}),
+        .be_i   ('1),
+        .ruser_o(),
+        .rdata_o(vld_tag_rdata[i])
+    );
+  end
+
+  always_ff @(posedge clk_i or negedge rst_ni) begin : p_regs
+    if (!rst_ni) begin
+      bank_idx_q <= '0;
+      bank_off_q <= '0;
+      vld_sel_q  <= '0;
+      cmp_en_q   <= '0;
+    end else begin
+      bank_idx_q <= bank_idx_d;
+      bank_off_q <= bank_off_d;
+      vld_sel_q  <= vld_sel_d;
+      cmp_en_q   <= cmp_en_d;
+    end
+  end
+
+  ///////////////////////////////////////////////////////
+  // assertions
+  ///////////////////////////////////////////////////////
+
+  //pragma translate_off
+`ifndef VERILATOR
+  initial begin
+    cach_line_width_axi :
+    assert (CVA6Cfg.DCACHE_LINE_WIDTH >= CVA6Cfg.AxiDataWidth)
+    else $fatal(1, "[l1 dcache] cache line size needs to be greater or equal AXI data width");
+  end
+
+  initial begin
+    axi_xlen :
+    assert (CVA6Cfg.AxiDataWidth >= CVA6Cfg.XLEN)
+    else $fatal(1, "[l1 dcache] AXI data width needs to be greater or equal CVA6Cfg.XLEN");
+  end
+
+  initial begin
+    cach_line_width_xlen :
+    assert (CVA6Cfg.DCACHE_LINE_WIDTH > CVA6Cfg.XLEN)
+    else $fatal(1, "[l1 dcache] cache_line_size needs to be greater than CVA6Cfg.XLEN");
+  end
+
+  hit_hot1 :
+  assert property (@(posedge clk_i) disable iff (!rst_ni) &vld_req |-> !vld_we |=> $onehot0(
+      rd_hit_oh_o
+  ))
+  else $fatal(1, "[l1 dcache] rd_hit_oh_o signal must be hot1");
+
+  word_write_hot1 :
+  assert property (@(posedge clk_i) disable iff (!rst_ni) wr_ack_o |-> $onehot0(wr_req_i))
+  else $fatal(1, "[l1 dcache] wr_req_i signal must be hot1");
+
+  wbuffer_hit_hot1 :
+  assert property (@(posedge clk_i) disable iff (!rst_ni) &vld_req |-> !vld_we |=> $onehot0(
+      wbuffer_hit_oh
+  ))
+  else $fatal(1, "[l1 dcache] wbuffer_hit_oh signal must be hot1");
+
+  // this is only used for verification!
+  logic vld_mirror[CVA6Cfg.DCACHE_NUM_WORDS-1:0][CVA6Cfg.DCACHE_SET_ASSOC-1:0];
+  logic [CVA6Cfg.DCACHE_TAG_WIDTH-1:0] tag_mirror[CVA6Cfg.DCACHE_NUM_WORDS-1:0][CVA6Cfg.DCACHE_SET_ASSOC-1:0];
+  logic [CVA6Cfg.DCACHE_SET_ASSOC-1:0] tag_write_duplicate_test;
+
+  always_ff @(posedge clk_i or negedge rst_ni) begin : p_mirror
+    if (!rst_ni) begin
+      vld_mirror <= '{default: '0};
+      tag_mirror <= '{default: '0};
+    end else begin
+      for (int i = 0; i < CVA6Cfg.DCACHE_SET_ASSOC; i++) begin
+        if (vld_req[i] & vld_we) begin
+          vld_mirror[vld_addr][i] <= vld_wdata[i];
+          tag_mirror[vld_addr][i] <= wr_cl_tag_i;
+        end
+      end
+    end
+  end
+
+  for (genvar i = 0; i < CVA6Cfg.DCACHE_SET_ASSOC; i++) begin : gen_tag_dubl_test
+    assign tag_write_duplicate_test[i] = (tag_mirror[vld_addr][i] == wr_cl_tag_i) & vld_mirror[vld_addr][i] & (|vld_wdata);
+  end
+
+  tag_write_duplicate :
+  assert property (
+    @(posedge clk_i) disable iff (!rst_ni) |vld_req |-> vld_we |-> !(|tag_write_duplicate_test))
+  else $fatal(1, "[l1 dcache] cannot allocate a CL that is already present in the cache");
+
+`endif
+  //pragma translate_on
+
+endmodule  // wt_dcache_mem
+// Copyright 2018 ETH Zurich and University of Bologna.
+// Copyright and related rights are licensed under the Solderpad Hardware
+// License, Version 0.51 (the "License"); you may not use this file except in
+// compliance with the License.  You may obtain a copy of the License at
+// http://solderpad.org/licenses/SHL-0.51. Unless required by applicable law
+// or agreed to in writing, software, hardware and materials distributed under
+// this License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
+// CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+// Author: Michael Schaffner <schaffner@iis.ee.ethz.ch>, ETH Zurich
+// Date: 15.08.2018
+// Description: Ariane cache subsystem that is compatible with the OpenPiton
+//              coherent memory system.
+//
+//              Define PITON_ARIANE if you want to use this cache.
+//              Define CVA6Cfg.DCacheType if you want to use this cache
+//              with a standard 64 bit AXI interface instead of the OpenPiton
+//              L1.5 interface.
+
+
+module wt_cache_subsystem
+  import ariane_pkg::*;
+  import wt_cache_pkg::*;
+#(
+    parameter config_pkg::cva6_cfg_t CVA6Cfg        = config_pkg::cva6_cfg_empty,
+    parameter type                   icache_areq_t  = logic,
+    parameter type                   icache_arsp_t  = logic,
+    parameter type                   icache_dreq_t  = logic,
+    parameter type                   icache_drsp_t  = logic,
+    parameter type                   dcache_req_i_t = logic,
+    parameter type                   dcache_req_o_t = logic,
+    parameter type                   icache_req_t   = logic,
+    parameter type                   icache_rtrn_t  = logic,
+    parameter int unsigned           NumPorts       = 4,
+    parameter type                   noc_req_t      = logic,
+    parameter type                   noc_resp_t     = logic
+) (
+    input logic clk_i,
+    input logic rst_ni,
+    // I$
+    input logic icache_en_i,  // enable icache (or bypass e.g: in debug mode)
+    input logic icache_flush_i,  // flush the icache, flush and kill have to be asserted together
+    output logic icache_miss_o,  // to performance counter
+    // address translation requests
+    input icache_areq_t icache_areq_i,  // to/from frontend
+    output icache_arsp_t icache_areq_o,
+    // data requests
+    input icache_dreq_t icache_dreq_i,  // to/from frontend
+    output icache_drsp_t icache_dreq_o,
+    // D$
+    // Cache management
+    input logic dcache_enable_i,  // from CSR
+    input logic dcache_flush_i,  // high until acknowledged
+    output logic                           dcache_flush_ack_o,     // send a single cycle acknowledge signal when the cache is flushed
+    output logic dcache_miss_o,  // we missed on a ld/st
+    // For Performance Counter
+    output logic [NumPorts-1:0][CVA6Cfg.DCACHE_SET_ASSOC-1:0] miss_vld_bits_o,
+    // AMO interface
+    input amo_req_t dcache_amo_req_i,
+    output amo_resp_t dcache_amo_resp_o,
+    // Request ports
+    input dcache_req_i_t [NumPorts-1:0] dcache_req_ports_i,  // to/from LSU
+    output dcache_req_o_t [NumPorts-1:0] dcache_req_ports_o,  // to/from LSU
+    // writebuffer status
+    output logic wbuffer_empty_o,
+    output logic wbuffer_not_ni_o,
+    // memory side
+    output noc_req_t noc_req_o,
+    input noc_resp_t noc_resp_i,
+    // Invalidations
+    input logic [63:0] inval_addr_i,
+    input logic inval_valid_i,
+    output logic inval_ready_o
+    // TODO: interrupt interface
+);
+
+  // dcache interface
+  localparam type dcache_inval_t = struct packed {
+    logic                                      vld;  // invalidate only affected way
+    logic                                      all;  // invalidate all ways
+    logic [CVA6Cfg.DCACHE_INDEX_WIDTH-1:0]     idx;  // physical address to invalidate
+    logic [CVA6Cfg.DCACHE_SET_ASSOC_WIDTH-1:0] way;  // way to invalidate
+  };
+
+  localparam type dcache_req_t = struct packed {
+    wt_cache_pkg::dcache_out_t rtype;  // see definitions above
+    logic [2:0]                                      size;        // transaction size: 000=Byte 001=2Byte; 010=4Byte; 011=8Byte; 111=Cache line (16/32Byte)
+    logic [CVA6Cfg.DCACHE_SET_ASSOC_WIDTH-1:0] way;  // way to replace
+    logic [CVA6Cfg.PLEN-1:0] paddr;  // physical address
+    logic [CVA6Cfg.XLEN-1:0] data;  // word width of processor (no block stores at the moment)
+    logic [CVA6Cfg.DCACHE_USER_WIDTH-1:0]          user;        // user width of processor (no block stores at the moment)
+    logic nc;  // noncacheable
+    logic [CVA6Cfg.MEM_TID_WIDTH-1:0] tid;  // threadi id (used as transaction id in Ariane)
+    ariane_pkg::amo_t amo_op;  // amo opcode
+  };
+
+  localparam type dcache_rtrn_t = struct packed {
+    wt_cache_pkg::dcache_in_t rtype;  // see definitions above
+    logic [CVA6Cfg.DCACHE_LINE_WIDTH-1:0] data;  // full cache line width
+    logic [CVA6Cfg.DCACHE_USER_LINE_WIDTH-1:0] user;  // user bits
+    dcache_inval_t inv;  // invalidation vector
+    logic [CVA6Cfg.MEM_TID_WIDTH-1:0] tid;  // threadi id (used as transaction id in Ariane)
+  };
+
+  logic icache_adapter_data_req, adapter_icache_data_ack, adapter_icache_rtrn_vld;
+  icache_req_t  icache_adapter;
+  icache_rtrn_t adapter_icache;
+
+
+  logic dcache_adapter_data_req, adapter_dcache_data_ack, adapter_dcache_rtrn_vld;
+  dcache_req_t  dcache_adapter;
+  dcache_rtrn_t adapter_dcache;
+
+  cva6_icache #(
+      // use ID 0 for icache reads
+      .CVA6Cfg(CVA6Cfg),
+      .icache_areq_t(icache_areq_t),
+      .icache_arsp_t(icache_arsp_t),
+      .icache_dreq_t(icache_dreq_t),
+      .icache_drsp_t(icache_drsp_t),
+      .icache_req_t(icache_req_t),
+      .icache_rtrn_t(icache_rtrn_t),
+      .RdTxId(0)
+  ) i_cva6_icache (
+      .clk_i         (clk_i),
+      .rst_ni        (rst_ni),
+      .flush_i       (icache_flush_i),
+      .en_i          (icache_en_i),
+      .miss_o        (icache_miss_o),
+      .areq_i        (icache_areq_i),
+      .areq_o        (icache_areq_o),
+      .dreq_i        (icache_dreq_i),
+      .dreq_o        (icache_dreq_o),
+      .mem_rtrn_vld_i(adapter_icache_rtrn_vld),
+      .mem_rtrn_i    (adapter_icache),
+      .mem_data_req_o(icache_adapter_data_req),
+      .mem_data_ack_i(adapter_icache_data_ack),
+      .mem_data_o    (icache_adapter)
+  );
+
+
+  // Note:
+  // Ports 0/1 for PTW and LD unit are read only.
+  // they have equal prio and are RR arbited
+  // Port 2 is write only and goes into the merging write buffer
+  wt_dcache #(
+      .CVA6Cfg(CVA6Cfg),
+      .dcache_req_i_t(dcache_req_i_t),
+      .dcache_req_o_t(dcache_req_o_t),
+      .dcache_req_t(dcache_req_t),
+      .dcache_rtrn_t(dcache_rtrn_t),
+      // use ID 1 for dcache reads and amos. note that the writebuffer
+      // uses all IDs up to DCACHE_MAX_TX-1 for write transactions.
+      .RdAmoTxId(1)
+  ) i_wt_dcache (
+      .clk_i           (clk_i),
+      .rst_ni          (rst_ni),
+      .enable_i        (dcache_enable_i),
+      .flush_i         (dcache_flush_i),
+      .flush_ack_o     (dcache_flush_ack_o),
+      .miss_o          (dcache_miss_o),
+      .wbuffer_empty_o (wbuffer_empty_o),
+      .wbuffer_not_ni_o(wbuffer_not_ni_o),
+      .amo_req_i       (dcache_amo_req_i),
+      .amo_resp_o      (dcache_amo_resp_o),
+      .req_ports_i     (dcache_req_ports_i),
+      .req_ports_o     (dcache_req_ports_o),
+      .miss_vld_bits_o (miss_vld_bits_o),
+      .mem_rtrn_vld_i  (adapter_dcache_rtrn_vld),
+      .mem_rtrn_i      (adapter_dcache),
+      .mem_data_req_o  (dcache_adapter_data_req),
+      .mem_data_ack_i  (adapter_dcache_data_ack),
+      .mem_data_o      (dcache_adapter)
+  );
+
+
+  ///////////////////////////////////////////////////////
+  // memory plumbing, either use 64bit AXI port or native
+  // L15 cache interface (derived from OpenSPARC CCX).
+  ///////////////////////////////////////////////////////
+
+`ifdef PITON_ARIANE
+  wt_l15_adapter #(
+      .CVA6Cfg(CVA6Cfg),
+      .dcache_req_t(dcache_req_t),
+      .dcache_rtrn_t(dcache_rtrn_t),
+      .icache_req_t(icache_req_t),
+      .icache_rtrn_t(icache_rtrn_t)
+  ) i_adapter (
+      .clk_i            (clk_i),
+      .rst_ni           (rst_ni),
+      .icache_data_req_i(icache_adapter_data_req),
+      .icache_data_ack_o(adapter_icache_data_ack),
+      .icache_data_i    (icache_adapter),
+      .icache_rtrn_vld_o(adapter_icache_rtrn_vld),
+      .icache_rtrn_o    (adapter_icache),
+      .dcache_data_req_i(dcache_adapter_data_req),
+      .dcache_data_ack_o(adapter_dcache_data_ack),
+      .dcache_data_i    (dcache_adapter),
+      .dcache_rtrn_vld_o(adapter_dcache_rtrn_vld),
+      .dcache_rtrn_o    (adapter_dcache),
+      .l15_req_o        (noc_req_o),
+      .l15_rtrn_i       (noc_resp_i)
+  );
+`else
+  wt_axi_adapter #(
+      .CVA6Cfg(CVA6Cfg),
+      .axi_req_t(noc_req_t),
+      .axi_rsp_t(noc_resp_t),
+      .dcache_req_t(dcache_req_t),
+      .dcache_rtrn_t(dcache_rtrn_t),
+      .dcache_inval_t(dcache_inval_t),
+      .icache_req_t(icache_req_t),
+      .icache_rtrn_t(icache_rtrn_t)
+  ) i_adapter (
+      .clk_i            (clk_i),
+      .rst_ni           (rst_ni),
+      .icache_data_req_i(icache_adapter_data_req),
+      .icache_data_ack_o(adapter_icache_data_ack),
+      .icache_data_i    (icache_adapter),
+      .icache_rtrn_vld_o(adapter_icache_rtrn_vld),
+      .icache_rtrn_o    (adapter_icache),
+      .dcache_data_req_i(dcache_adapter_data_req),
+      .dcache_data_ack_o(adapter_dcache_data_ack),
+      .dcache_data_i    (dcache_adapter),
+      .dcache_rtrn_vld_o(adapter_dcache_rtrn_vld),
+      .dcache_rtrn_o    (adapter_dcache),
+      .axi_req_o        (noc_req_o),
+      .axi_resp_i       (noc_resp_i),
+      .inval_addr_i     (inval_addr_i),
+      .inval_valid_i    (inval_valid_i),
+      .inval_ready_o    (inval_ready_o)
+  );
+`endif
+
+  ///////////////////////////////////////////////////////
+  // assertions
+  ///////////////////////////////////////////////////////
+
+  //pragma translate_off
+`ifndef VERILATOR
+  a_invalid_instruction_fetch :
+  assert property (
+    @(posedge clk_i) disable iff (!rst_ni) icache_dreq_o.valid |-> (|icache_dreq_o.data) !== 1'hX)
+  else
+    $warning(
+        1,
+        "[l1 dcache] reading invalid instructions: vaddr=%08X, data=%08X",
+        icache_dreq_o.vaddr,
+        icache_dreq_o.data
+    );
+
+  for (genvar j = 0; j < CVA6Cfg.XLEN / 8; j++) begin : gen_invalid_write_assertion
+    a_invalid_write_data :
+    assert property (
+      @(posedge clk_i) disable iff (!rst_ni) dcache_req_ports_i[NumPorts-1].data_req |-> dcache_req_ports_i[NumPorts-1].data_be[j] |-> (|dcache_req_ports_i[NumPorts-1].data_wdata[j*8+:8] !== 1'hX))
+    else
+      $warning(
+          1,
+          "[l1 dcache] writing invalid data: paddr=%016X, be=%02X, data=%016X, databe=%016X",
+          {
+            dcache_req_ports_i[NumPorts-1].address_tag, dcache_req_ports_i[NumPorts-1].address_index
+          },
+          dcache_req_ports_i[NumPorts-1].data_be,
+          dcache_req_ports_i[NumPorts-1].data_wdata,
+          dcache_req_ports_i[NumPorts-1].data_be & dcache_req_ports_i[NumPorts-1].data_wdata
+      );
+  end
+
+
+  for (genvar j = 0; j < NumPorts - 1; j++) begin : gen_assertion
+    a_invalid_read_data :
+    assert property (
+      @(posedge clk_i) disable iff (!rst_ni) dcache_req_ports_o[j].data_rvalid && ~dcache_req_ports_i[j].kill_req |-> (|dcache_req_ports_o[j].data_rdata) !== 1'hX)
+    else
+      $warning(
+          1,
+          "[l1 dcache] reading invalid data on port %01d: data=%016X",
+          j,
+          dcache_req_ports_o[j].data_rdata
+      );
+  end
+`endif
+  //pragma translate_on
+
+
+endmodule  // wt_cache_subsystem
+/* Copyright 2018 ETH Zurich and University of Bologna.
+ * Copyright and related rights are licensed under the Solderpad Hardware
+ * License, Version 0.51 (the “License”); you may not use this file except in
+ * compliance with the License.  You may obtain a copy of the License at
+ * http://solderpad.org/licenses/SHL-0.51. Unless required by applicable law
+ * or agreed to in writing, software, hardware and materials distributed under
+ * this License is distributed on an “AS IS” BASIS, WITHOUT WARRANTIES OR
+ * CONDITIONS OF ANY KIND, either express or implied. See the License for the
+ * specific language governing permissions and limitations under the License.
+ *
+ * File:  axi_adapter.sv
+ * Author: Florian Zaruba <zarubaf@iis.ee.ethz.ch>
+ * Date:   1.8.2018
+ *
+ * Description: Manages communication with the AXI Bus
+ */
+//import std_cache_pkg::*;
+
+module axi_adapter #(
+    parameter config_pkg::cva6_cfg_t CVA6Cfg = config_pkg::cva6_cfg_empty,
+    parameter int unsigned DATA_WIDTH = 256,
+    parameter logic        CRITICAL_WORD_FIRST   = 0, // the AXI subsystem needs to support wrapping reads for this feature
+    parameter int unsigned CACHELINE_BYTE_OFFSET = 8,
+    parameter type axi_req_t = logic,
+    parameter type axi_rsp_t = logic
+) (
+    input logic clk_i,  // Clock
+    input logic rst_ni, // Asynchronous reset active low
+
+    input logic req_i,
+    input ariane_pkg::ad_req_t type_i,
+    input ariane_pkg::amo_t amo_i,
+    output logic gnt_o,
+    input logic [CVA6Cfg.XLEN-1:0] addr_i,
+    input logic we_i,
+    input logic [(DATA_WIDTH/CVA6Cfg.AxiDataWidth)-1:0][CVA6Cfg.AxiDataWidth-1:0] wdata_i,
+    input logic [(DATA_WIDTH/CVA6Cfg.AxiDataWidth)-1:0][(CVA6Cfg.AxiDataWidth/8)-1:0] be_i,
+    input logic [1:0] size_i,
+    input logic [CVA6Cfg.AxiIdWidth-1:0] id_i,
+    // read port
+    output logic valid_o,
+    output logic [(DATA_WIDTH/CVA6Cfg.AxiDataWidth)-1:0][CVA6Cfg.AxiDataWidth-1:0] rdata_o,
+    output logic [CVA6Cfg.AxiIdWidth-1:0] id_o,
+    // critical word - read port
+    output logic [CVA6Cfg.AxiDataWidth-1:0] critical_word_o,
+    output logic critical_word_valid_o,
+    // AXI port
+    output axi_req_t axi_req_o,
+    input axi_rsp_t axi_resp_i
+);
+  localparam BURST_SIZE = (DATA_WIDTH / CVA6Cfg.AxiDataWidth) - 1;
+  localparam ADDR_INDEX = ($clog2(
+      DATA_WIDTH / CVA6Cfg.AxiDataWidth
+  ) > 0) ? $clog2(
+      DATA_WIDTH / CVA6Cfg.AxiDataWidth
+  ) : 1;
+  localparam MAX_OUTSTANDING_AW = CVA6Cfg.MaxOutstandingStores;
+  localparam MAX_OUTSTANDING_AW_CNT_WIDTH = $clog2(
+      MAX_OUTSTANDING_AW + 1
+  ) > 0 ? $clog2(
+      MAX_OUTSTANDING_AW + 1
+  ) : 1;
+
+  typedef logic [MAX_OUTSTANDING_AW_CNT_WIDTH-1:0] outstanding_aw_cnt_t;
+
+  enum logic [3:0] {
+    IDLE,
+    WAIT_B_VALID,
+    WAIT_AW_READY,
+    WAIT_LAST_W_READY,
+    WAIT_LAST_W_READY_AW_READY,
+    WAIT_AW_READY_BURST,
+    WAIT_R_VALID,
+    WAIT_R_VALID_MULTIPLE,
+    COMPLETE_READ,
+    WAIT_AMO_R_VALID
+  }
+      state_q, state_d;
+
+  // counter for AXI transfers
+  logic [ADDR_INDEX-1:0] cnt_d, cnt_q;
+  logic [(DATA_WIDTH/CVA6Cfg.AxiDataWidth)-1:0][CVA6Cfg.AxiDataWidth-1:0]
+      cache_line_d, cache_line_q;
+  // save the address for a read, as we allow for non-cacheline aligned accesses
+  logic [(DATA_WIDTH/CVA6Cfg.AxiDataWidth)-1:0] addr_offset_d, addr_offset_q;
+  logic [CVA6Cfg.AxiIdWidth-1:0] id_d, id_q;
+  logic [ADDR_INDEX-1:0] index;
+  // save the atomic operation and size
+  ariane_pkg::amo_t amo_d, amo_q;
+  logic [1:0] size_d, size_q;
+  // outstanding write transactions counter
+  outstanding_aw_cnt_t outstanding_aw_cnt_q, outstanding_aw_cnt_d;
+  logic any_outstanding_aw;
+
+  assign any_outstanding_aw = outstanding_aw_cnt_q != '0;
+
+  always_comb begin : axi_fsm
+    // Default assignments
+    axi_req_o.aw_valid  = 1'b0;
+    // Cast to AXI address width
+    axi_req_o.aw.addr   = addr_i;
+    axi_req_o.aw.prot   = 3'b0;
+    axi_req_o.aw.region = 4'b0;
+    axi_req_o.aw.len    = 8'b0;
+    axi_req_o.aw.size   = {1'b0, size_i};  // 1, 2, 4 or 8 bytes
+    axi_req_o.aw.burst  = axi_pkg::BURST_INCR;  // Use BURST_INCR for AXI regular transaction
+    axi_req_o.aw.lock   = 1'b0;
+    axi_req_o.aw.cache  = axi_pkg::CACHE_MODIFIABLE;
+    axi_req_o.aw.qos    = 4'b0;
+    axi_req_o.aw.id     = id_i;
+    axi_req_o.aw.atop   = atop_from_amo(amo_i);
+    axi_req_o.aw.user   = '0;
+
+    axi_req_o.ar_valid  = 1'b0;
+    // Cast to AXI address width
+    axi_req_o.ar.addr   = addr_i;
+    // in case of a single request or wrapping transfer we can simply begin at the address, if we want to request a cache-line
+    // with an incremental transfer we need to output the corresponding base address of the cache line
+    if (!CRITICAL_WORD_FIRST && type_i != ariane_pkg::SINGLE_REQ) begin
+      axi_req_o.ar.addr[CACHELINE_BYTE_OFFSET-1:0] = '0;
+    end
+    axi_req_o.ar.prot = 3'b0;
+    axi_req_o.ar.region = 4'b0;
+    axi_req_o.ar.len = 8'b0;
+    axi_req_o.ar.size = {1'b0, size_i};  // 1, 2, 4 or 8 bytes
+    axi_req_o.ar.burst  = (CRITICAL_WORD_FIRST ? axi_pkg::BURST_WRAP : axi_pkg::BURST_INCR); // wrapping transfer in case of a critical word first strategy
+    axi_req_o.ar.lock = 1'b0;
+    axi_req_o.ar.cache = axi_pkg::CACHE_MODIFIABLE;
+    axi_req_o.ar.qos = 4'b0;
+    axi_req_o.ar.id = id_i;
+    axi_req_o.ar.user = '0;
+
+    axi_req_o.w_valid = 1'b0;
+    axi_req_o.w.data = wdata_i[0];
+    axi_req_o.w.strb = be_i[0];
+    axi_req_o.w.last = 1'b0;
+    axi_req_o.w.user = '0;
+
+    axi_req_o.b_ready = 1'b0;
+    axi_req_o.r_ready = 1'b0;
+
+    gnt_o = 1'b0;
+    valid_o = 1'b0;
+    id_o = axi_resp_i.r.id;
+
+    critical_word_o = axi_resp_i.r.data;
+    critical_word_valid_o = 1'b0;
+    rdata_o = cache_line_q;
+
+    state_d = state_q;
+    cnt_d = cnt_q;
+    cache_line_d = cache_line_q;
+    addr_offset_d = addr_offset_q;
+    id_d = id_q;
+    amo_d = amo_q;
+    size_d = size_q;
+    index = '0;
+
+    outstanding_aw_cnt_d = outstanding_aw_cnt_q;
+
+    case (state_q)
+
+      IDLE: begin
+        cnt_d = '0;
+        // we have an incoming request
+        if (req_i) begin
+          // is this a read or write?
+          // write
+          if (we_i) begin
+            // multiple outstanding write transactions are only
+            // allowed if they are guaranteed not to be reordered
+            // i.e. same ID
+            if (!any_outstanding_aw || ((id_i == id_q) && (amo_i == ariane_pkg::AMO_NONE))) begin
+              // the data is valid
+              axi_req_o.aw_valid = 1'b1;
+              axi_req_o.w_valid  = 1'b1;
+              // store-conditional requires exclusive access
+              axi_req_o.aw.lock  = amo_i == ariane_pkg::AMO_SC;
+              // its a single write
+              if (type_i == ariane_pkg::SINGLE_REQ) begin
+                // only a single write so the data is already the last one
+                axi_req_o.w.last = 1'b1;
+                // single req can be granted here
+                gnt_o = axi_resp_i.aw_ready & axi_resp_i.w_ready;
+                case ({
+                  axi_resp_i.aw_ready, axi_resp_i.w_ready
+                })
+                  2'b11:   state_d = WAIT_B_VALID;
+                  2'b01:   state_d = WAIT_AW_READY;
+                  2'b10:   state_d = WAIT_LAST_W_READY;
+                  default: state_d = IDLE;
+                endcase
+
+                if (axi_resp_i.aw_ready) begin
+                  id_d   = id_i;
+                  amo_d  = amo_i;
+                  size_d = size_i;
+                end
+
+                // its a request for the whole cache line
+              end else begin
+                // bursts of AMOs unsupported
+                assert (amo_i == ariane_pkg::AMO_NONE)
+                else $fatal(1, "Bursts of atomic operations are not supported");
+
+                axi_req_o.aw.len = BURST_SIZE[7:0];  // number of bursts to do
+                axi_req_o.w.data = wdata_i[0];
+                axi_req_o.w.strb = be_i[0];
+
+                if (axi_resp_i.w_ready) cnt_d = BURST_SIZE[ADDR_INDEX-1:0] - 1;
+                else cnt_d = BURST_SIZE[ADDR_INDEX-1:0];
+
+                case ({
+                  axi_resp_i.aw_ready, axi_resp_i.w_ready
+                })
+                  2'b11:   state_d = WAIT_LAST_W_READY;
+                  2'b01:   state_d = WAIT_LAST_W_READY_AW_READY;
+                  2'b10:   state_d = WAIT_LAST_W_READY;
+                  default: ;
+                endcase
+              end
+            end
+            // read
+          end else begin
+            // only multiple outstanding write transactions are allowed
+            if (!any_outstanding_aw) begin
+
+              axi_req_o.ar_valid = 1'b1;
+              // load-reserved requires exclusive access
+              axi_req_o.ar.lock = amo_i == ariane_pkg::AMO_LR;
+
+              gnt_o = axi_resp_i.ar_ready;
+              if (type_i != ariane_pkg::SINGLE_REQ) begin
+                assert (amo_i == ariane_pkg::AMO_NONE)
+                else $fatal(1, "Bursts of atomic operations are not supported");
+
+                axi_req_o.ar.len = BURST_SIZE[7:0];
+                cnt_d = BURST_SIZE[ADDR_INDEX-1:0];
+              end
+
+              if (axi_resp_i.ar_ready) begin
+                state_d = (type_i == ariane_pkg::SINGLE_REQ) ? WAIT_R_VALID : WAIT_R_VALID_MULTIPLE;
+                addr_offset_d = addr_i[ADDR_INDEX-1+3:3];
+              end
+            end
+          end
+        end
+      end
+
+      // ~> from single write
+      WAIT_AW_READY: begin
+        axi_req_o.aw_valid = 1'b1;
+
+        if (axi_resp_i.aw_ready) begin
+          gnt_o   = 1'b1;
+          state_d = WAIT_B_VALID;
+          id_d    = id_i;
+          amo_d   = amo_i;
+          size_d  = size_i;
+        end
+      end
+
+      // ~> we need to wait for an aw_ready and there is at least one outstanding write
+      WAIT_LAST_W_READY_AW_READY: begin
+        axi_req_o.w_valid = 1'b1;
+        axi_req_o.w.last  = (cnt_q == '0);
+        if (type_i == ariane_pkg::SINGLE_REQ) begin
+          axi_req_o.w.data = wdata_i[0];
+          axi_req_o.w.strb = be_i[0];
+        end else begin
+          axi_req_o.w.data = wdata_i[BURST_SIZE[ADDR_INDEX-1:0]-cnt_q];
+          axi_req_o.w.strb = be_i[BURST_SIZE[ADDR_INDEX-1:0]-cnt_q];
+        end
+        axi_req_o.aw_valid = 1'b1;
+        // we are here because we want to write a cache line
+        axi_req_o.aw.len   = BURST_SIZE[7:0];
+        // we got an aw_ready
+        case ({
+          axi_resp_i.aw_ready, axi_resp_i.w_ready
+        })
+          // we got an aw ready
+          2'b01: begin
+            // are there any outstanding transactions?
+            if (cnt_q == 0) state_d = WAIT_AW_READY_BURST;
+            else  // yes, so reduce the count and stay here
+              cnt_d = cnt_q - 1;
+          end
+          2'b10:   state_d = WAIT_LAST_W_READY;
+          2'b11: begin
+            // we are finished
+            if (cnt_q == 0) begin
+              state_d = WAIT_B_VALID;
+              gnt_o   = 1'b1;
+              // there are outstanding transactions
+            end else begin
+              state_d = WAIT_LAST_W_READY;
+              cnt_d   = cnt_q - 1;
+            end
+          end
+          default: ;
+        endcase
+
+      end
+
+      // ~> all data has already been sent, we are only waiting for the aw_ready
+      WAIT_AW_READY_BURST: begin
+        axi_req_o.aw_valid = 1'b1;
+        axi_req_o.aw.len   = BURST_SIZE[7:0];
+
+        if (axi_resp_i.aw_ready) begin
+          state_d = WAIT_B_VALID;
+          gnt_o   = 1'b1;
+        end
+      end
+
+      // ~> from write, there is an outstanding write
+      WAIT_LAST_W_READY: begin
+        axi_req_o.w_valid = 1'b1;
+
+        if (type_i != ariane_pkg::SINGLE_REQ) begin
+          axi_req_o.w.data = wdata_i[BURST_SIZE[ADDR_INDEX-1:0]-cnt_q];
+          axi_req_o.w.strb = be_i[BURST_SIZE[ADDR_INDEX-1:0]-cnt_q];
+        end
+
+        // this is the last write
+        if (cnt_q == '0) begin
+          axi_req_o.w.last = 1'b1;
+          if (axi_resp_i.w_ready) begin
+            state_d = WAIT_B_VALID;
+            gnt_o   = 1'b1;
+          end
+        end else if (axi_resp_i.w_ready) begin
+          cnt_d = cnt_q - 1;
+        end
+      end
+
+      // ~> finish write transaction
+      WAIT_B_VALID: begin
+        id_o = axi_resp_i.b.id;
+
+        // Write is valid
+        if (axi_resp_i.b_valid && !any_outstanding_aw) begin
+          axi_req_o.b_ready = 1'b1;
+
+          // some atomics must wait for read data
+          // we only accept it after accepting bvalid
+          if (amo_returns_data(amo_q)) begin
+            if (axi_resp_i.r_valid) begin
+              // return read data if valid
+              valid_o           = 1'b1;
+              axi_req_o.r_ready = 1'b1;
+              state_d           = IDLE;
+              rdata_o           = axi_resp_i.r.data;
+            end else begin
+              // wait otherwise
+              state_d = WAIT_AMO_R_VALID;
+            end
+          end else begin
+            valid_o = 1'b1;
+            state_d = IDLE;
+
+            // store-conditional response
+            if (amo_q == ariane_pkg::AMO_SC) begin
+              if (axi_resp_i.b.resp == axi_pkg::RESP_EXOKAY) begin
+                // success -> return 0
+                rdata_o = 'b0;
+              end else begin
+                // failure -> when request is 64-bit, return 1;
+                // when request is 32-bit place a 1 in both upper
+                // and lower half words. The right word will be
+                // realigned/masked externally
+                rdata_o = size_q == 2'b10 ? (1'b1 << 32) | 64'b1 : 64'b1;
+              end
+            end
+          end
+          // if the request was not an atomic we can possibly issue
+          // other requests while waiting for the response
+        end else begin
+          if ((amo_q == ariane_pkg::AMO_NONE) && (outstanding_aw_cnt_q != MAX_OUTSTANDING_AW)) begin
+            state_d = IDLE;
+            outstanding_aw_cnt_d = outstanding_aw_cnt_q + 1;
+          end
+        end
+      end
+
+      // ~> some atomics wait for read data
+      WAIT_AMO_R_VALID: begin
+        // acknowledge data and terminate atomic
+        if (axi_resp_i.r_valid) begin
+          axi_req_o.r_ready = 1'b1;
+          state_d           = IDLE;
+          valid_o           = 1'b1;
+          rdata_o           = axi_resp_i.r.data;
+        end
+      end
+
+      // ~> cacheline read, single read
+      WAIT_R_VALID_MULTIPLE, WAIT_R_VALID: begin
+        if (CRITICAL_WORD_FIRST) index = addr_offset_q + (BURST_SIZE[ADDR_INDEX-1:0] - cnt_q);
+        else index = BURST_SIZE[ADDR_INDEX-1:0] - cnt_q;
+
+        // reads are always wrapping here
+        axi_req_o.r_ready = 1'b1;
+        // this is the first read a.k.a the critical word
+        if (axi_resp_i.r_valid) begin
+          if (CRITICAL_WORD_FIRST) begin
+            // this is the first word of a cacheline read, e.g.: the word which was causing the miss
+            if (state_q == WAIT_R_VALID_MULTIPLE && cnt_q == BURST_SIZE) begin
+              critical_word_valid_o = 1'b1;
+              critical_word_o       = axi_resp_i.r.data;
+            end
+          end else begin
+            // check if the address offset matches - then we are getting the critical word
+            if (index == addr_offset_q) begin
+              critical_word_valid_o = 1'b1;
+              critical_word_o       = axi_resp_i.r.data;
+            end
+          end
+
+          // this is the last read
+          if (axi_resp_i.r.last) begin
+            id_d    = axi_resp_i.r.id;
+            state_d = COMPLETE_READ;
+          end
+
+          // save the word
+          if (state_q == WAIT_R_VALID_MULTIPLE) begin
+            cache_line_d[index] = axi_resp_i.r.data;
+
+          end else cache_line_d[0] = axi_resp_i.r.data;
+
+          // Decrease the counter
+          cnt_d = cnt_q - 1;
+        end
+      end
+      // ~> read is complete
+      COMPLETE_READ: begin
+        valid_o = 1'b1;
+        state_d = IDLE;
+        id_o    = id_q;
+      end
+
+      default: state_d = IDLE;
+    endcase
+
+    // This process handles B responses when accepting
+    // multiple outstanding write transactions
+    if (any_outstanding_aw && axi_resp_i.b_valid) begin
+      axi_req_o.b_ready = 1'b1;
+      valid_o = 1'b1;
+      // Right hand side contains non-registered signal as we want
+      // to preserve a possible increment from the WAIT_B_VALID state
+      outstanding_aw_cnt_d = outstanding_aw_cnt_d - 1;
+    end
+  end
+
+  // ----------------
+  // Registers
+  // ----------------
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (~rst_ni) begin
+      // start in flushing state and initialize the memory
+      state_q              <= IDLE;
+      cnt_q                <= '0;
+      cache_line_q         <= '0;
+      addr_offset_q        <= '0;
+      id_q                 <= '0;
+      amo_q                <= ariane_pkg::AMO_NONE;
+      size_q               <= '0;
+      outstanding_aw_cnt_q <= '0;
+    end else begin
+      state_q              <= state_d;
+      cnt_q                <= cnt_d;
+      cache_line_q         <= cache_line_d;
+      addr_offset_q        <= addr_offset_d;
+      id_q                 <= id_d;
+      amo_q                <= amo_d;
+      size_q               <= size_d;
+      outstanding_aw_cnt_q <= outstanding_aw_cnt_d;
+    end
+  end
+
+  function automatic axi_pkg::atop_t atop_from_amo(ariane_pkg::amo_t amo);
+    axi_pkg::atop_t result = 6'b000000;
+
+    unique case (amo)
+      ariane_pkg::AMO_NONE: result = {axi_pkg::ATOP_NONE, 4'b0000};
+      ariane_pkg::AMO_SWAP: result = {axi_pkg::ATOP_ATOMICSWAP};
+      ariane_pkg::AMO_ADD:
+      result = {axi_pkg::ATOP_ATOMICLOAD, axi_pkg::ATOP_LITTLE_END, axi_pkg::ATOP_ADD};
+      ariane_pkg::AMO_AND:
+      result = {axi_pkg::ATOP_ATOMICLOAD, axi_pkg::ATOP_LITTLE_END, axi_pkg::ATOP_CLR};
+      ariane_pkg::AMO_OR:
+      result = {axi_pkg::ATOP_ATOMICLOAD, axi_pkg::ATOP_LITTLE_END, axi_pkg::ATOP_SET};
+      ariane_pkg::AMO_XOR:
+      result = {axi_pkg::ATOP_ATOMICLOAD, axi_pkg::ATOP_LITTLE_END, axi_pkg::ATOP_EOR};
+      ariane_pkg::AMO_MAX:
+      result = {axi_pkg::ATOP_ATOMICLOAD, axi_pkg::ATOP_LITTLE_END, axi_pkg::ATOP_SMAX};
+      ariane_pkg::AMO_MAXU:
+      result = {axi_pkg::ATOP_ATOMICLOAD, axi_pkg::ATOP_LITTLE_END, axi_pkg::ATOP_UMAX};
+      ariane_pkg::AMO_MIN:
+      result = {axi_pkg::ATOP_ATOMICLOAD, axi_pkg::ATOP_LITTLE_END, axi_pkg::ATOP_SMIN};
+      ariane_pkg::AMO_MINU:
+      result = {axi_pkg::ATOP_ATOMICLOAD, axi_pkg::ATOP_LITTLE_END, axi_pkg::ATOP_UMIN};
+      ariane_pkg::AMO_CAS1: result = {axi_pkg::ATOP_NONE, 4'b0000};  // Unsupported
+      ariane_pkg::AMO_CAS2: result = {axi_pkg::ATOP_NONE, 4'b0000};  // Unsupported
+      default: result = 6'b000000;
+    endcase
+
+    return result;
+  endfunction
+
+  function automatic logic amo_returns_data(ariane_pkg::amo_t amo);
+    axi_pkg::atop_t atop = atop_from_amo(amo);
+    logic           is_load = atop[5:4] == axi_pkg::ATOP_ATOMICLOAD;
+    logic           is_swap_or_cmp = atop[5:4] == axi_pkg::ATOP_ATOMICSWAP[5:4];
+    return is_load || is_swap_or_cmp;
+  endfunction
+
+endmodule
+// Copyright 2018 ETH Zurich and University of Bologna.
+// Copyright and related rights are licensed under the Solderpad Hardware
+// License, Version 0.51 (the "License"); you may not use this file except in
+// compliance with the License.  You may obtain a copy of the License at
+// http://solderpad.org/licenses/SHL-0.51. Unless required by applicable law
+// or agreed to in writing, software, hardware and materials distributed under
+// this License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
+// CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+// Author: Michael Schaffner <schaffner@iis.ee.ethz.ch>, ETH Zurich
+// Date: 08.08.2018
+// Description: adapter module to connect the L1D$ and L1I$ to a 64bit AXI bus.
+//
+
+
+module wt_axi_adapter
+  import ariane_pkg::*;
+  import wt_cache_pkg::*;
+#(
+    parameter config_pkg::cva6_cfg_t CVA6Cfg = config_pkg::cva6_cfg_empty,
+    parameter int unsigned ReqFifoDepth = 2,
+    parameter int unsigned MetaFifoDepth = CVA6Cfg.DCACHE_MAX_TX,
+    parameter type axi_req_t = logic,
+    parameter type axi_rsp_t = logic,
+    parameter type dcache_req_t = logic,
+    parameter type dcache_rtrn_t = logic,
+    parameter type dcache_inval_t = logic,
+    parameter type icache_req_t = logic,
+    parameter type icache_rtrn_t = logic
+) (
+    input logic clk_i,
+    input logic rst_ni,
+
+    // icache
+    input  logic         icache_data_req_i,
+    output logic         icache_data_ack_o,
+    input  icache_req_t  icache_data_i,
+    // returning packets must be consumed immediately
+    output logic         icache_rtrn_vld_o,
+    output icache_rtrn_t icache_rtrn_o,
+
+    // dcache
+    input  logic         dcache_data_req_i,
+    output logic         dcache_data_ack_o,
+    input  dcache_req_t  dcache_data_i,
+    // returning packets must be consumed immediately
+    output logic         dcache_rtrn_vld_o,
+    output dcache_rtrn_t dcache_rtrn_o,
+
+    // AXI port
+    output axi_req_t axi_req_o,
+    input  axi_rsp_t axi_resp_i,
+
+    // Invalidations
+    input  logic [63:0] inval_addr_i,
+    input  logic        inval_valid_i,
+    output logic        inval_ready_o
+);
+
+  // support up to 512bit cache lines
+  localparam AxiNumWords = (CVA6Cfg.ICACHE_LINE_WIDTH/CVA6Cfg.AxiDataWidth) * (CVA6Cfg.ICACHE_LINE_WIDTH > CVA6Cfg.DCACHE_LINE_WIDTH)  +
+                           (CVA6Cfg.DCACHE_LINE_WIDTH/CVA6Cfg.AxiDataWidth) * (CVA6Cfg.ICACHE_LINE_WIDTH <= CVA6Cfg.DCACHE_LINE_WIDTH) ;
+  localparam MaxNumWords = $clog2(CVA6Cfg.AxiDataWidth / 8);
+  localparam AxiRdBlenIcache = CVA6Cfg.ICACHE_LINE_WIDTH / CVA6Cfg.AxiDataWidth - 1;
+  localparam AxiRdBlenDcache = CVA6Cfg.DCACHE_LINE_WIDTH / CVA6Cfg.AxiDataWidth - 1;
+  localparam AxiBlenWidth = AxiNumWords > 1 ? $clog2(AxiNumWords) : AxiNumWords;
+
+  ///////////////////////////////////////////////////////
+  // request path
+  ///////////////////////////////////////////////////////
+
+  icache_req_t icache_data;
+  logic icache_data_full, icache_data_empty;
+  dcache_req_t dcache_data;
+  logic dcache_data_full, dcache_data_empty;
+
+  logic [1:0] arb_req, arb_ack;
+  logic arb_idx, arb_gnt;
+
+  logic axi_rd_req, axi_rd_gnt;
+  logic axi_wr_req, axi_wr_gnt;
+  logic axi_wr_valid, axi_rd_valid, axi_rd_rdy, axi_wr_rdy;
+  logic axi_rd_lock, axi_wr_lock, axi_rd_exokay, axi_wr_exokay, wr_exokay;
+  logic [CVA6Cfg.AxiAddrWidth-1:0] axi_rd_addr, axi_wr_addr;
+  logic [AxiBlenWidth-1:0] axi_rd_blen, axi_wr_blen;
+  logic [2:0] axi_rd_size, axi_wr_size;
+  logic [CVA6Cfg.AxiIdWidth-1:0]
+      axi_rd_id_in, axi_wr_id_in, axi_rd_id_out, axi_wr_id_out, wr_id_out;
+  logic [AxiNumWords-1:0][CVA6Cfg.AxiDataWidth-1:0] axi_wr_data;
+  logic [AxiNumWords-1:0][CVA6Cfg.AxiUserWidth-1:0] axi_wr_user;
+  logic [CVA6Cfg.AxiDataWidth-1:0] axi_rd_data;
+  logic [CVA6Cfg.AxiUserWidth-1:0] axi_rd_user;
+  logic [AxiNumWords-1:0][(CVA6Cfg.AxiDataWidth/8)-1:0] axi_wr_be;
+  logic [5:0] axi_wr_atop;
+  logic invalidate;
+  logic [$clog2(CVA6Cfg.AxiDataWidth/8)-1:0] amo_off_d, amo_off_q;
+  // AMO generates r beat
+  logic amo_gen_r_d, amo_gen_r_q;
+
+  logic [CVA6Cfg.MEM_TID_WIDTH-1:0] icache_rtrn_tid_d, icache_rtrn_tid_q;
+  logic [CVA6Cfg.MEM_TID_WIDTH-1:0] dcache_rtrn_tid_d, dcache_rtrn_tid_q;
+  logic [CVA6Cfg.MEM_TID_WIDTH-1:0] dcache_rtrn_rd_tid, dcache_rtrn_wr_tid;
+  logic dcache_rd_pop, dcache_wr_pop;
+  logic icache_rd_full, icache_rd_empty;
+  logic dcache_rd_full, dcache_rd_empty;
+  logic dcache_wr_full, dcache_wr_empty;
+
+  assign icache_data_ack_o = icache_data_req_i & ~icache_data_full;
+  assign dcache_data_ack_o = dcache_data_req_i & ~dcache_data_full;
+
+  // arbiter
+  assign arb_req = {
+    ~(dcache_data_empty | dcache_wr_full | dcache_rd_full), ~(icache_data_empty | icache_rd_full)
+  };
+
+  assign arb_gnt = axi_rd_gnt | axi_wr_gnt;
+
+  rr_arb_tree #(
+      .NumIn    (2),
+      .DataWidth(1),
+      .AxiVldRdy(1'b1),
+      .LockIn   (1'b1)
+  ) i_rr_arb_tree (
+      .clk_i  (clk_i),
+      .rst_ni (rst_ni),
+      .flush_i('0),
+      .rr_i   ('0),
+      .req_i  (arb_req),
+      .gnt_o  (arb_ack),
+      .data_i ('0),
+      .gnt_i  (arb_gnt),
+      .req_o  (),
+      .data_o (),
+      .idx_o  (arb_idx)
+  );
+
+  // request side
+  always_comb begin : p_axi_req
+    // write channel
+    axi_wr_id_in = {{CVA6Cfg.AxiIdWidth-1{1'b0}}, arb_idx};
+    axi_wr_data[0]  = {(CVA6Cfg.AxiDataWidth/CVA6Cfg.XLEN){dcache_data.data}};
+    axi_wr_user[0]  = dcache_data.user;
+    // Cast to AXI address width
+    axi_wr_addr  = {{CVA6Cfg.AxiAddrWidth-CVA6Cfg.PLEN{1'b0}}, dcache_data.paddr};
+    axi_wr_size  = dcache_data.size;
+    axi_wr_req   = 1'b0;
+    axi_wr_blen  = '0;// single word writes
+    axi_wr_be    = '0;
+    axi_wr_lock  = '0;
+    axi_wr_atop  = '0;
+    amo_off_d    = amo_off_q;
+    amo_gen_r_d  = amo_gen_r_q;
+
+    // read channel
+    axi_rd_id_in = {{CVA6Cfg.AxiIdWidth-1{1'b0}}, arb_idx};
+    axi_rd_req   = 1'b0;
+    axi_rd_lock  = '0;
+    axi_rd_blen  = '0;
+
+    if (dcache_data.paddr[2] == 1'b0) begin
+      axi_wr_user = {{64 - CVA6Cfg.AxiUserWidth{1'b0}}, dcache_data.user};
+    end else begin
+      axi_wr_user = {dcache_data.user, {64 - CVA6Cfg.AxiUserWidth{1'b0}}};
+    end
+
+    // arbiter mux
+    if (arb_idx) begin
+      // Cast to AXI address width
+      axi_rd_addr = {{CVA6Cfg.AxiAddrWidth - CVA6Cfg.PLEN{1'b0}}, dcache_data.paddr};
+      // If dcache_data.size MSB is set, we want to read as much as possible
+      axi_rd_size = dcache_data.size[2] ? MaxNumWords[2:0] : dcache_data.size;
+      if (dcache_data.size[2]) begin
+        axi_rd_blen = AxiRdBlenDcache[AxiBlenWidth-1:0];
+      end
+    end else begin
+      // Cast to AXI address width
+      axi_rd_addr = {{CVA6Cfg.AxiAddrWidth - CVA6Cfg.PLEN{1'b0}}, icache_data.paddr};
+      axi_rd_size = MaxNumWords[2:0];  // always request max number of words in case of ifill
+      if (!icache_data.nc) begin
+        axi_rd_blen = AxiRdBlenDcache[AxiBlenWidth-1:0];
+      end
+    end
+
+    // signal that an invalidation message
+    // needs to be generated
+    invalidate = 1'b0;
+
+    // decode message type
+    if (|arb_req) begin
+      if (arb_idx == 0) begin
+        //////////////////////////////////////
+        // IMISS
+        axi_rd_req = 1'b1;
+        //////////////////////////////////////
+      end else begin
+        unique case (dcache_data.rtype)
+          //////////////////////////////////////
+          wt_cache_pkg::DCACHE_LOAD_REQ: begin
+            axi_rd_req = 1'b1;
+          end
+          //////////////////////////////////////
+          wt_cache_pkg::DCACHE_STORE_REQ: begin
+            axi_wr_req = 1'b1;
+            axi_wr_be  = '0;
+            unique case (dcache_data.size[1:0])
+              2'b00:
+              axi_wr_be[0][dcache_data.paddr[$clog2(CVA6Cfg.AxiDataWidth/8)-1:0]] = '1;  // byte
+              2'b01:
+              axi_wr_be[0][dcache_data.paddr[$clog2(CVA6Cfg.AxiDataWidth/8)-1:0]+:2] = '1;  // hword
+              2'b10:
+              axi_wr_be[0][dcache_data.paddr[$clog2(CVA6Cfg.AxiDataWidth/8)-1:0]+:4] = '1;  // word
+              default:
+              if (CVA6Cfg.IS_XLEN64)
+                axi_wr_be[0][dcache_data.paddr[$clog2(
+                    CVA6Cfg.AxiDataWidth/8
+                )-1:0]+:8] = '1;  // dword
+            endcase
+          end
+          //////////////////////////////////////
+          wt_cache_pkg::DCACHE_ATOMIC_REQ: begin
+            if (CVA6Cfg.RVA) begin
+              // default
+              // push back an invalidation here.
+              // since we only keep one read tx in flight, and since
+              // the dcache drains all writes/reads before executing
+              // an atomic, this is safe.
+              invalidate = arb_gnt;
+              axi_wr_req = 1'b1;
+              axi_wr_be  = '0;
+              unique case (dcache_data.size[1:0])
+                2'b00:
+                axi_wr_be[0][dcache_data.paddr[$clog2(CVA6Cfg.AxiDataWidth/8)-1:0]] = '1;  // byte
+                2'b01:
+                axi_wr_be[0][dcache_data.paddr[$clog2(CVA6Cfg.AxiDataWidth/8)-1:0]+:2] =
+                    '1;  // hword
+                2'b10:
+                axi_wr_be[0][dcache_data.paddr[$clog2(CVA6Cfg.AxiDataWidth/8)-1:0]+:4] =
+                    '1;  // word
+                default:
+                axi_wr_be[0][dcache_data.paddr[$clog2(CVA6Cfg.AxiDataWidth/8)-1:0]+:8] =
+                    '1;  // dword
+              endcase
+              amo_gen_r_d = 1'b1;
+              // need to use a separate ID here, so concat an additional bit
+              axi_wr_id_in[1] = 1'b1;
+
+              unique case (dcache_data.amo_op)
+                AMO_LR: begin
+                  axi_rd_lock     = 1'b1;
+                  axi_rd_req      = 1'b1;
+                  axi_rd_id_in[1] = 1'b1;
+                  // tie to zero in this special case
+                  axi_wr_req      = 1'b0;
+                  axi_wr_be       = '0;
+                end
+                AMO_SC: begin
+                  axi_wr_lock = 1'b1;
+                  amo_gen_r_d = 1'b0;
+                  // needed to properly encode success. store the result at offset within the returned
+                  // AXI data word aligned with the requested word size.
+                  amo_off_d = dcache_data.paddr[$clog2(CVA6Cfg.AxiDataWidth/8)-
+                                                1:0] & ~((1 << dcache_data.size[1:0]) - 1);
+                end
+                // RISC-V atops have a load semantic
+                AMO_SWAP: axi_wr_atop = axi_pkg::ATOP_ATOMICSWAP;
+                AMO_ADD:
+                axi_wr_atop = {
+                  axi_pkg::ATOP_ATOMICLOAD, axi_pkg::ATOP_LITTLE_END, axi_pkg::ATOP_ADD
+                };
+                AMO_AND: begin
+                  // in this case we need to invert the data to get a "CLR"
+                  axi_wr_data[0] = ~{(CVA6Cfg.AxiDataWidth / CVA6Cfg.XLEN) {dcache_data.data}};
+                  axi_wr_user = ~{(CVA6Cfg.AxiDataWidth / CVA6Cfg.XLEN) {dcache_data.user}};
+                  axi_wr_atop = {
+                    axi_pkg::ATOP_ATOMICLOAD, axi_pkg::ATOP_LITTLE_END, axi_pkg::ATOP_CLR
+                  };
+                end
+                AMO_OR:
+                axi_wr_atop = {
+                  axi_pkg::ATOP_ATOMICLOAD, axi_pkg::ATOP_LITTLE_END, axi_pkg::ATOP_SET
+                };
+                AMO_XOR:
+                axi_wr_atop = {
+                  axi_pkg::ATOP_ATOMICLOAD, axi_pkg::ATOP_LITTLE_END, axi_pkg::ATOP_EOR
+                };
+                AMO_MAX:
+                axi_wr_atop = {
+                  axi_pkg::ATOP_ATOMICLOAD, axi_pkg::ATOP_LITTLE_END, axi_pkg::ATOP_SMAX
+                };
+                AMO_MAXU:
+                axi_wr_atop = {
+                  axi_pkg::ATOP_ATOMICLOAD, axi_pkg::ATOP_LITTLE_END, axi_pkg::ATOP_UMAX
+                };
+                AMO_MIN:
+                axi_wr_atop = {
+                  axi_pkg::ATOP_ATOMICLOAD, axi_pkg::ATOP_LITTLE_END, axi_pkg::ATOP_SMIN
+                };
+                AMO_MINU:
+                axi_wr_atop = {
+                  axi_pkg::ATOP_ATOMICLOAD, axi_pkg::ATOP_LITTLE_END, axi_pkg::ATOP_UMIN
+                };
+                default: ;  // Do nothing
+              endcase
+            end
+          end
+          default: ;  // Do nothing
+          //////////////////////////////////////
+        endcase
+      end
+    end
+  end
+
+  cva6_fifo_v3 #(
+      .FPGA_ALTERA(CVA6Cfg.FpgaAlteraEn),
+      .dtype(icache_req_t),
+      .DEPTH(ReqFifoDepth),
+      .FPGA_EN(CVA6Cfg.FpgaEn)
+  ) i_icache_data_fifo (
+      .clk_i     (clk_i),
+      .rst_ni    (rst_ni),
+      .flush_i   (1'b0),
+      .testmode_i(1'b0),
+      .full_o    (icache_data_full),
+      .empty_o   (icache_data_empty),
+      .usage_o   (),
+      .data_i    (icache_data_i),
+      .push_i    (icache_data_ack_o),
+      .data_o    (icache_data),
+      .pop_i     (arb_ack[0])
+  );
+
+  cva6_fifo_v3 #(
+      .FPGA_ALTERA(CVA6Cfg.FpgaAlteraEn),
+      .dtype(dcache_req_t),
+      .DEPTH(ReqFifoDepth),
+      .FPGA_EN(CVA6Cfg.FpgaEn)
+  ) i_dcache_data_fifo (
+      .clk_i     (clk_i),
+      .rst_ni    (rst_ni),
+      .flush_i   (1'b0),
+      .testmode_i(1'b0),
+      .full_o    (dcache_data_full),
+      .empty_o   (dcache_data_empty),
+      .usage_o   (),
+      .data_i    (dcache_data_i),
+      .push_i    (dcache_data_ack_o),
+      .data_o    (dcache_data),
+      .pop_i     (arb_ack[1])
+  );
+
+  ///////////////////////////////////////////////////////
+  // meta info feedback fifos
+  ///////////////////////////////////////////////////////
+
+  logic icache_rtrn_rd_en, dcache_rtrn_rd_en;
+  logic icache_rtrn_vld_d, icache_rtrn_vld_q, dcache_rtrn_vld_d, dcache_rtrn_vld_q;
+
+  cva6_fifo_v3 #(
+      .DATA_WIDTH(CVA6Cfg.MEM_TID_WIDTH),
+      .DEPTH     (MetaFifoDepth),
+      .FPGA_EN   (CVA6Cfg.FpgaEn)
+  ) i_rd_icache_id (
+      .clk_i     (clk_i),
+      .rst_ni    (rst_ni),
+      .flush_i   (1'b0),
+      .testmode_i(1'b0),
+      .full_o    (icache_rd_full),
+      .empty_o   (icache_rd_empty),
+      .usage_o   (),
+      .data_i    (icache_data.tid),
+      .push_i    (arb_ack[0] & axi_rd_gnt),
+      .data_o    (icache_rtrn_tid_d),
+      .pop_i     (icache_rtrn_vld_d)
+  );
+
+  cva6_fifo_v3 #(
+      .DATA_WIDTH(CVA6Cfg.MEM_TID_WIDTH),
+      .DEPTH     (MetaFifoDepth),
+      .FPGA_EN   (CVA6Cfg.FpgaEn)
+  ) i_rd_dcache_id (
+      .clk_i     (clk_i),
+      .rst_ni    (rst_ni),
+      .flush_i   (1'b0),
+      .testmode_i(1'b0),
+      .full_o    (dcache_rd_full),
+      .empty_o   (dcache_rd_empty),
+      .usage_o   (),
+      .data_i    (dcache_data.tid),
+      .push_i    (arb_ack[1] & axi_rd_gnt),
+      .data_o    (dcache_rtrn_rd_tid),
+      .pop_i     (dcache_rd_pop)
+  );
+
+  cva6_fifo_v3 #(
+      .DATA_WIDTH(CVA6Cfg.MEM_TID_WIDTH),
+      .DEPTH     (MetaFifoDepth),
+      .FPGA_EN   (CVA6Cfg.FpgaEn)
+  ) i_wr_dcache_id (
+      .clk_i     (clk_i),
+      .rst_ni    (rst_ni),
+      .flush_i   (1'b0),
+      .testmode_i(1'b0),
+      .full_o    (dcache_wr_full),
+      .empty_o   (dcache_wr_empty),
+      .usage_o   (),
+      .data_i    (dcache_data.tid),
+      .push_i    (arb_ack[1] & axi_wr_gnt),
+      .data_o    (dcache_rtrn_wr_tid),
+      .pop_i     (dcache_wr_pop)
+  );
+
+  // select correct tid to return
+  assign dcache_rtrn_tid_d = (dcache_wr_pop) ? dcache_rtrn_wr_tid : dcache_rtrn_rd_tid;
+
+  ///////////////////////////////////////////////////////
+  // return path
+  ///////////////////////////////////////////////////////
+
+  // buffer write responses
+  logic b_full, b_empty, b_push, b_pop;
+  assign axi_wr_rdy = ~b_full;
+  assign b_push     = axi_wr_valid & axi_wr_rdy;
+
+  cva6_fifo_v3 #(
+      .DATA_WIDTH  (CVA6Cfg.AxiIdWidth + 1),
+      .DEPTH       (MetaFifoDepth),
+      .FALL_THROUGH(1'b1),
+      .FPGA_EN     (CVA6Cfg.FpgaEn)
+  ) i_b_fifo (
+      .clk_i     (clk_i),
+      .rst_ni    (rst_ni),
+      .flush_i   (1'b0),
+      .testmode_i(1'b0),
+      .full_o    (b_full),
+      .empty_o   (b_empty),
+      .usage_o   (),
+      .data_i    ({axi_wr_exokay, axi_wr_id_out}),
+      .push_i    (b_push),
+      .data_o    ({wr_exokay, wr_id_out}),
+      .pop_i     (b_pop)
+  );
+
+  // buffer read responses in shift regs
+  logic icache_first_d, icache_first_q, dcache_first_d, dcache_first_q;
+  logic [CVA6Cfg.ICACHE_USER_LINE_WIDTH/CVA6Cfg.AxiUserWidth-1:0][CVA6Cfg.AxiUserWidth-1:0]
+      icache_rd_shift_user_d, icache_rd_shift_user_q;
+  logic [CVA6Cfg.DCACHE_USER_LINE_WIDTH/CVA6Cfg.AxiUserWidth-1:0][CVA6Cfg.AxiUserWidth-1:0]
+      dcache_rd_shift_user_d, dcache_rd_shift_user_q;
+  logic [CVA6Cfg.ICACHE_LINE_WIDTH/CVA6Cfg.AxiDataWidth-1:0][CVA6Cfg.AxiDataWidth-1:0]
+      icache_rd_shift_d, icache_rd_shift_q;
+  logic [CVA6Cfg.DCACHE_LINE_WIDTH/CVA6Cfg.AxiDataWidth-1:0][CVA6Cfg.AxiDataWidth-1:0]
+      dcache_rd_shift_d, dcache_rd_shift_q;
+  wt_cache_pkg::dcache_in_t dcache_rtrn_type_d, dcache_rtrn_type_q;
+  dcache_inval_t dcache_rtrn_inv_d, dcache_rtrn_inv_q;
+  logic dcache_sc_rtrn, axi_rd_last;
+
+  always_comb begin : p_axi_rtrn_shift
+    // output directly from regs
+    icache_rtrn_o          = '0;
+    icache_rtrn_o.rtype    = wt_cache_pkg::ICACHE_IFILL_ACK;
+    icache_rtrn_o.tid      = icache_rtrn_tid_q;
+    icache_rtrn_o.data     = icache_rd_shift_q;
+    icache_rtrn_o.user     = icache_rd_shift_user_q;
+    icache_rtrn_vld_o      = icache_rtrn_vld_q;
+
+    dcache_rtrn_o          = '0;
+    dcache_rtrn_o.rtype    = dcache_rtrn_type_q;
+    dcache_rtrn_o.inv      = dcache_rtrn_inv_q;
+    dcache_rtrn_o.tid      = dcache_rtrn_tid_q;
+    dcache_rtrn_o.data     = dcache_rd_shift_q;
+    dcache_rtrn_o.user     = dcache_rd_shift_user_q;
+    dcache_rtrn_vld_o      = dcache_rtrn_vld_q;
+
+    // read shift registers
+    icache_rd_shift_d      = icache_rd_shift_q;
+    icache_rd_shift_user_d = icache_rd_shift_user_q;
+    dcache_rd_shift_d      = dcache_rd_shift_q;
+    dcache_rd_shift_user_d = dcache_rd_shift_user_q;
+    icache_first_d         = icache_first_q;
+    dcache_first_d         = dcache_first_q;
+
+    if (icache_rtrn_rd_en) begin
+      icache_first_d = axi_rd_last;
+      if (CVA6Cfg.ICACHE_LINE_WIDTH == CVA6Cfg.AxiDataWidth) begin
+        icache_rd_shift_d[0] = axi_rd_data;
+      end else begin
+        icache_rd_shift_d = {
+          axi_rd_data, icache_rd_shift_q[CVA6Cfg.ICACHE_LINE_WIDTH/CVA6Cfg.AxiDataWidth-1:1]
+        };
+      end
+      icache_rd_shift_user_d = {
+        axi_rd_user, icache_rd_shift_user_q[CVA6Cfg.ICACHE_USER_LINE_WIDTH/CVA6Cfg.AxiUserWidth-1:1]
+      };
+      // if this is a single word transaction, we need to make sure that word is placed at offset 0
+      if (icache_first_q) begin
+        icache_rd_shift_d[0] = axi_rd_data;
+        icache_rd_shift_user_d[0] = axi_rd_user;
+      end
+    end
+
+    if (dcache_rtrn_rd_en) begin
+      dcache_first_d = axi_rd_last;
+      if (CVA6Cfg.DCACHE_LINE_WIDTH == CVA6Cfg.AxiDataWidth) begin
+        dcache_rd_shift_d[0] = axi_rd_data;
+      end else begin
+        dcache_rd_shift_d = {
+          axi_rd_data, dcache_rd_shift_q[CVA6Cfg.DCACHE_LINE_WIDTH/CVA6Cfg.AxiDataWidth-1:1]
+        };
+      end
+      dcache_rd_shift_user_d = {
+        axi_rd_user, dcache_rd_shift_user_q[CVA6Cfg.DCACHE_USER_LINE_WIDTH/CVA6Cfg.AxiUserWidth-1:1]
+      };
+      // if this is a single word transaction, we need to make sure that word is placed at offset 0
+      if (dcache_first_q) begin
+        dcache_rd_shift_d[0] = axi_rd_data;
+        dcache_rd_shift_user_d[0] = axi_rd_user;
+      end
+    end else if (CVA6Cfg.RVA && dcache_sc_rtrn) begin
+      // encode lr/sc success
+      dcache_rd_shift_d[0] = '0;
+      dcache_rd_shift_user_d[0] = '0;
+      dcache_rd_shift_d[0][amo_off_q*8] = (wr_exokay) ? '0 : 1'b1;
+      dcache_rd_shift_user_d[0][amo_off_q*8] = (wr_exokay) ? '0 : 1'b1;
+    end
+  end
+
+  // decode virtual read channels of icache
+  always_comb begin : p_axi_rtrn_decode
+    // we are not ready when invalidating
+    // note: b's are buffered separately
+    axi_rd_rdy        = ~invalidate;
+
+    icache_rtrn_rd_en = 1'b0;
+    icache_rtrn_vld_d = 1'b0;
+
+    // decode virtual icache channel,
+    // this is independent on dcache decoding below
+    if (axi_rd_valid && axi_rd_id_out == 0 && axi_rd_rdy) begin
+      icache_rtrn_rd_en = 1'b1;
+      icache_rtrn_vld_d = axi_rd_last;
+    end
+
+    dcache_rtrn_rd_en  = 1'b0;
+    dcache_rtrn_vld_d  = 1'b0;
+    dcache_rd_pop      = 1'b0;
+    dcache_wr_pop      = 1'b0;
+    dcache_rtrn_inv_d  = '0;
+    dcache_rtrn_type_d = wt_cache_pkg::DCACHE_LOAD_ACK;
+    b_pop              = 1'b0;
+    dcache_sc_rtrn     = 1'b0;
+
+    // External invalidation requests (from coprocessor). This is safe as
+    // there are no other transactions when a coprocessor has pending stores.
+    inval_ready_o      = 1'b0;
+    if (inval_valid_i) begin
+      inval_ready_o         = 1'b1;
+      dcache_rtrn_type_d    = wt_cache_pkg::DCACHE_INV_REQ;
+      dcache_rtrn_vld_d     = 1'b1;
+      dcache_rtrn_inv_d.all = 1'b1;
+      dcache_rtrn_inv_d.idx = inval_addr_i[CVA6Cfg.DCACHE_INDEX_WIDTH-1:0];
+      //////////////////////////////////////
+      // dcache needs some special treatment
+      // for arbitration and decoding of atomics
+      //////////////////////////////////////
+      // this is safe, there is no other read tx in flight than this atomic.
+      // note that this self invalidation is handled in this way due to the
+      // write-through cache architecture, which is aligned with the openpiton
+      // cache subsystem.
+    end else if (CVA6Cfg.RVA && invalidate) begin
+      dcache_rtrn_type_d = wt_cache_pkg::DCACHE_INV_REQ;
+      dcache_rtrn_vld_d = 1'b1;
+
+      dcache_rtrn_inv_d.all = 1'b1;
+      dcache_rtrn_inv_d.idx = dcache_data.paddr[CVA6Cfg.DCACHE_INDEX_WIDTH-1:0];
+      //////////////////////////////////////
+      // read responses
+      // note that in case of atomics, the dcache sequentializes requests and
+      // guarantees that there are no other pending transactions in flight
+    end else if (axi_rd_valid && axi_rd_id_out[0] && axi_rd_rdy) begin
+      dcache_rtrn_rd_en = 1'b1;
+      dcache_rtrn_vld_d = axi_rd_last;
+
+      // if this was an atomic op
+      if (CVA6Cfg.RVA && axi_rd_id_out[1]) begin
+        dcache_rtrn_type_d = wt_cache_pkg::DCACHE_ATOMIC_ACK;
+
+        // check if transaction was issued over write channel and pop that ID
+        if (!dcache_wr_empty) begin
+          dcache_wr_pop = axi_rd_last;
+          // if this is not the case, there MUST be an id in the read channel (LR)
+        end else begin
+          dcache_rd_pop = axi_rd_last;
+        end
+      end else begin
+        dcache_rd_pop = axi_rd_last;
+      end
+      //////////////////////////////////////
+      // write responses, check b fifo
+    end else if (!b_empty) begin
+      b_pop = 1'b1;
+
+      // this was an atomic
+      if (CVA6Cfg.RVA && wr_id_out[1]) begin
+        dcache_rtrn_type_d = wt_cache_pkg::DCACHE_ATOMIC_ACK;
+
+        // silently discard b response if we already popped the fifo
+        // with a R beat (iff the amo transaction generated an R beat)
+        if (!amo_gen_r_q) begin
+          dcache_rtrn_vld_d = 1'b1;
+          dcache_wr_pop     = 1'b1;
+          dcache_sc_rtrn    = 1'b1;
+        end
+      end else begin
+        // regular response
+        dcache_rtrn_type_d = wt_cache_pkg::DCACHE_STORE_ACK;
+        dcache_rtrn_vld_d  = 1'b1;
+        dcache_wr_pop      = 1'b1;
+      end
+    end
+    //////////////////////////////////////
+  end
+
+  // remote invalidations are not supported yet (this needs a cache coherence protocol)
+  // note that the atomic transactions would also need a "master exclusive monitor" in that case
+  // assign icache_rtrn_o.inv.idx  = '0;
+  // assign icache_rtrn_o.inv.way  = '0;
+  // assign icache_rtrn_o.inv.vld  = '0;
+  // assign icache_rtrn_o.inv.all  = '0;
+
+  // assign dcache_rtrn_o.inv.idx  = '0;
+  // assign dcache_rtrn_o.inv.way  = '0;
+  // assign dcache_rtrn_o.inv.vld  = '0;
+  // assign dcache_rtrn_o.inv.all  = '0;
+
+  always_ff @(posedge clk_i or negedge rst_ni) begin : p_rd_buf
+    if (!rst_ni) begin
+      icache_first_q         <= 1'b1;
+      dcache_first_q         <= 1'b1;
+      icache_rd_shift_q      <= '0;
+      icache_rd_shift_user_q <= '0;
+      dcache_rd_shift_q      <= '0;
+      dcache_rd_shift_user_q <= '0;
+      icache_rtrn_vld_q      <= '0;
+      dcache_rtrn_vld_q      <= '0;
+      icache_rtrn_tid_q      <= '0;
+      dcache_rtrn_tid_q      <= '0;
+      dcache_rtrn_type_q     <= wt_cache_pkg::DCACHE_LOAD_ACK;
+      dcache_rtrn_inv_q      <= '0;
+      amo_off_q              <= '0;
+      amo_gen_r_q            <= 1'b0;
+    end else begin
+      icache_first_q         <= icache_first_d;
+      dcache_first_q         <= dcache_first_d;
+      icache_rd_shift_q      <= icache_rd_shift_d;
+      icache_rd_shift_user_q <= icache_rd_shift_user_d;
+      dcache_rd_shift_q      <= dcache_rd_shift_d;
+      dcache_rd_shift_user_q <= dcache_rd_shift_user_d;
+      icache_rtrn_vld_q      <= icache_rtrn_vld_d;
+      dcache_rtrn_vld_q      <= dcache_rtrn_vld_d;
+      icache_rtrn_tid_q      <= icache_rtrn_tid_d;
+      dcache_rtrn_tid_q      <= dcache_rtrn_tid_d;
+      dcache_rtrn_type_q     <= dcache_rtrn_type_d;
+      dcache_rtrn_inv_q      <= dcache_rtrn_inv_d;
+      amo_off_q              <= amo_off_d;
+      amo_gen_r_q            <= amo_gen_r_d;
+    end
+  end
+
+
+  ///////////////////////////////////////////////////////
+  // axi protocol shim
+  ///////////////////////////////////////////////////////
+
+  axi_shim #(
+      .CVA6Cfg    (CVA6Cfg),
+      .AxiNumWords(AxiNumWords),
+      .axi_req_t  (axi_req_t),
+      .axi_rsp_t  (axi_rsp_t)
+  ) i_axi_shim (
+      .clk_i      (clk_i),
+      .rst_ni     (rst_ni),
+      .rd_req_i   (axi_rd_req),
+      .rd_gnt_o   (axi_rd_gnt),
+      .rd_addr_i  (axi_rd_addr),
+      .rd_blen_i  (axi_rd_blen),
+      .rd_size_i  (axi_rd_size),
+      .rd_id_i    (axi_rd_id_in),
+      .rd_rdy_i   (axi_rd_rdy),
+      .rd_lock_i  (axi_rd_lock),
+      .rd_last_o  (axi_rd_last),
+      .rd_valid_o (axi_rd_valid),
+      .rd_data_o  (axi_rd_data),
+      .rd_user_o  (axi_rd_user),
+      .rd_id_o    (axi_rd_id_out),
+      .rd_exokay_o(axi_rd_exokay),
+      .wr_req_i   (axi_wr_req),
+      .wr_gnt_o   (axi_wr_gnt),
+      .wr_addr_i  (axi_wr_addr),
+      .wr_data_i  (axi_wr_data),
+      .wr_user_i  (axi_wr_user),
+      .wr_be_i    (axi_wr_be),
+      .wr_blen_i  (axi_wr_blen),
+      .wr_size_i  (axi_wr_size),
+      .wr_id_i    (axi_wr_id_in),
+      .wr_lock_i  (axi_wr_lock),
+      .wr_atop_i  (axi_wr_atop),
+      .wr_rdy_i   (axi_wr_rdy),
+      .wr_valid_o (axi_wr_valid),
+      .wr_id_o    (axi_wr_id_out),
+      .wr_exokay_o(axi_wr_exokay),
+      .axi_req_o  (axi_req_o),
+      .axi_resp_i (axi_resp_i)
+  );
+
+  ///////////////////////////////////////////////////////
+  // assertions
+  ///////////////////////////////////////////////////////
+
+  //pragma translate_off
+`ifndef VERILATOR
+
+`endif
+  //pragma translate_on
+
+endmodule  // wt_l15_adapter
+// Copyright 2018 ETH Zurich and University of Bologna.
+// Copyright and related rights are licensed under the Solderpad Hardware
+// License, Version 0.51 (the "License"); you may not use this file except in
+// compliance with the License.  You may obtain a copy of the License at
+// http://solderpad.org/licenses/SHL-0.51. Unless required by applicable law
+// or agreed to in writing, software, hardware and materials distributed under
+// this License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
+// CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+// Author: Michael Schaffner <schaffner@iis.ee.ethz.ch>, ETH Zurich
+// Date: 13.09.2018
+// Description: coalescing write buffer for WT dcache
+//
+// A couple of notes:
+//
+// 1) the write buffer behaves as a fully-associative cache, and is therefore coalescing.
+//    this cache is used by the cache readout logic to forward data to the load unit.
+//
+//    each byte can be in the following states (valid/dirty/txblock):
+//
+//    0/0/0:    invalid -> free entry in the buffer
+//    1/1/0:    valid and dirty, Byte is hence not part of TX in-flight
+//    1/0/1:    valid and not dirty, Byte is part of a TX in-flight
+//    1/1/1:    valid and, part of tx and dirty. this means that the byte has been
+//              overwritten while in TX and needs to be retransmitted once the write of that byte returns.
+//    1/0/0:    this would represent a clean state, but is never reached in the wbuffer in the current implementation.
+//              this is because when a TX returns, and the byte is in state [1/0/1], it is written to cache if needed and
+//              its state is immediately cleared to 0/x/x.
+//
+//    this state is used to distinguish between bytes that have been written and not
+//    yet sent to the memory subsystem, and bytes that are part of a transaction.
+//
+// 2) further, each word in the write buffer has a cache states (checked, hit_oh)
+//
+//    checked == 0: unknown cache state
+//    checked == 1: cache state has been looked up, valid way is stored in "hit_oh"
+//
+//    cache invalidations/refills affecting a particular word will clear its word state to 0,
+//    so another lookup has to be done. note that these lookups are triggered as soon as there is
+//    a valid word with checked == 0 in the write buffer.
+//
+// 3) returning write ACKs trigger a cache update if the word is present in the cache, and evict that
+//    word from the write buffer. if the word is not allocated to the cache, it is just evicted from the write buffer.
+//    if the word cache state is VOID, the pipeline is stalled until it is clear whether that word is in the cache or not.
+//
+// 4) we handle NC writes using the writebuffer circuitry. upon an NC request, the writebuffer will first be drained.
+//    then, only the NC word is written into the write buffer and no further write requests are acknowledged until that
+//    word has been evicted from the write buffer.
+
+
+module wt_dcache_wbuffer
+  import ariane_pkg::*;
+  import wt_cache_pkg::*;
+#(
+    parameter config_pkg::cva6_cfg_t CVA6Cfg = config_pkg::cva6_cfg_empty,
+    parameter DCACHE_CL_IDX_WIDTH = 0,
+    parameter type dcache_req_i_t = logic,
+    parameter type dcache_req_o_t = logic,
+    parameter type wbuffer_t = logic
+) (
+    input logic clk_i,  // Clock
+    input logic rst_ni, // Asynchronous reset active low
+
+    input logic cache_en_i,  // writes are treated as NC if disabled
+    output logic empty_o,  // asserted if no data is present in write buffer
+    output logic not_ni_o,  // asserted if no ni data is present in write buffer
+    // core request ports
+    input dcache_req_i_t req_port_i,
+    output dcache_req_o_t req_port_o,
+    // interface to miss handler
+    input logic miss_ack_i,
+    output logic [CVA6Cfg.PLEN-1:0] miss_paddr_o,
+    output logic miss_req_o,
+    output logic miss_we_o,  // always 1 here
+    output logic [CVA6Cfg.XLEN-1:0] miss_wdata_o,
+    output logic [CVA6Cfg.DCACHE_USER_WIDTH-1:0] miss_wuser_o,
+    output logic [CVA6Cfg.DCACHE_SET_ASSOC-1:0] miss_vld_bits_o,  // unused here (set to 0)
+    output logic miss_nc_o,  // request to I/O space
+    output logic [2:0] miss_size_o,  //
+    output logic [CVA6Cfg.MEM_TID_WIDTH-1:0]          miss_id_o,       // ID of this transaction (wbuffer uses all IDs from 0 to DCACHE_MAX_TX-1)
+    // write responses from memory
+    input logic miss_rtrn_vld_i,
+    input logic [CVA6Cfg.MEM_TID_WIDTH-1:0] miss_rtrn_id_i,  // transaction ID to clear
+    // cache read interface
+    output logic [CVA6Cfg.DCACHE_TAG_WIDTH-1:0] rd_tag_o,  // tag in - comes one cycle later
+    output logic [DCACHE_CL_IDX_WIDTH-1:0] rd_idx_o,
+    output logic [CVA6Cfg.DCACHE_OFFSET_WIDTH-1:0] rd_off_o,
+    output logic rd_req_o,  // read the word at offset off_i[:3] in all ways
+    output logic rd_tag_only_o,  // set to 1 here as we do not have to read the data arrays
+    input logic rd_ack_i,
+    input logic [CVA6Cfg.XLEN-1:0] rd_data_i,  // unused
+    input logic [CVA6Cfg.DCACHE_SET_ASSOC-1:0] rd_vld_bits_i,  // unused
+    input logic [CVA6Cfg.DCACHE_SET_ASSOC-1:0] rd_hit_oh_i,
+    // cacheline writes
+    input logic wr_cl_vld_i,
+    input logic [DCACHE_CL_IDX_WIDTH-1:0] wr_cl_idx_i,
+    // cache word write interface
+    output logic [CVA6Cfg.DCACHE_SET_ASSOC-1:0] wr_req_o,
+    input logic wr_ack_i,
+    output logic [DCACHE_CL_IDX_WIDTH-1:0] wr_idx_o,
+    output logic [CVA6Cfg.DCACHE_OFFSET_WIDTH-1:0] wr_off_o,
+    output logic [CVA6Cfg.XLEN-1:0] wr_data_o,
+    output logic [(CVA6Cfg.XLEN/8)-1:0] wr_data_be_o,
+    output logic [CVA6Cfg.DCACHE_USER_WIDTH-1:0] wr_user_o,
+    // to forwarding logic and miss unit
+    output wbuffer_t [CVA6Cfg.WtDcacheWbufDepth-1:0] wbuffer_data_o,
+    output logic [CVA6Cfg.DCACHE_MAX_TX-1:0][CVA6Cfg.PLEN-1:0]     tx_paddr_o,      // used to check for address collisions with read operations
+    output logic [CVA6Cfg.DCACHE_MAX_TX-1:0] tx_vld_o
+);
+
+  function automatic logic [(CVA6Cfg.XLEN/8)-1:0] to_byte_enable8(
+      input logic [CVA6Cfg.XLEN_ALIGN_BYTES-1:0] offset, input logic [1:0] size);
+    logic [(CVA6Cfg.XLEN/8)-1:0] be;
+    be = '0;
+    unique case (size)
+      2'b00:   be[offset] = '1;  // byte
+      2'b01:   be[offset+:2] = '1;  // hword
+      2'b10:   be[offset+:4] = '1;  // word
+      default: be = '1;  // dword
+    endcase  // size
+    return be;
+  endfunction : to_byte_enable8
+
+  function automatic logic [(CVA6Cfg.XLEN/8)-1:0] to_byte_enable4(
+      input logic [CVA6Cfg.XLEN_ALIGN_BYTES-1:0] offset, input logic [1:0] size);
+    logic [3:0] be;
+    be = '0;
+    unique case (size)
+      2'b00:   be[offset] = '1;  // byte
+      2'b01:   be[offset+:2] = '1;  // hword
+      default: be = '1;  // word
+    endcase  // size
+    return be;
+  endfunction : to_byte_enable4
+
+  // openpiton requires the data to be replicated in case of smaller sizes than dwords
+  function automatic logic [CVA6Cfg.XLEN-1:0] repData64(
+      input logic [CVA6Cfg.XLEN-1:0] data, input logic [CVA6Cfg.XLEN_ALIGN_BYTES-1:0] offset,
+      input logic [1:0] size);
+    logic [CVA6Cfg.XLEN-1:0] out;
+    unique case (size)
+      2'b00:   for (int k = 0; k < 8; k++) out[k*8+:8] = data[offset*8+:8];  // byte
+      2'b01:   for (int k = 0; k < 4; k++) out[k*16+:16] = data[offset*8+:16];  // hword
+      2'b10:   for (int k = 0; k < 2; k++) out[k*32+:32] = data[offset*8+:32];  // word
+      default: out = data;  // dword
+    endcase  // size
+    return out;
+  endfunction : repData64
+
+  function automatic logic [CVA6Cfg.XLEN-1:0] repData32(
+      input logic [CVA6Cfg.XLEN-1:0] data, input logic [CVA6Cfg.XLEN_ALIGN_BYTES-1:0] offset,
+      input logic [1:0] size);
+    logic [CVA6Cfg.XLEN-1:0] out;
+    unique case (size)
+      2'b00:   for (int k = 0; k < 4; k++) out[k*8+:8] = data[offset*8+:8];  // byte
+      2'b01:   for (int k = 0; k < 2; k++) out[k*16+:16] = data[offset*8+:16];  // hword
+      default: out = data;  // word
+    endcase  // size
+    return out;
+  endfunction : repData32
+
+  typedef struct packed {
+    logic                                         vld;
+    logic [(CVA6Cfg.XLEN/8)-1:0]                  be;
+    logic [$clog2(CVA6Cfg.WtDcacheWbufDepth)-1:0] ptr;
+  } tx_stat_t;
+
+  tx_stat_t [CVA6Cfg.DCACHE_MAX_TX-1:0] tx_stat_d, tx_stat_q;
+  wbuffer_t [CVA6Cfg.WtDcacheWbufDepth-1:0] wbuffer_d, wbuffer_q;
+  logic [CVA6Cfg.WtDcacheWbufDepth-1:0] valid;
+  logic [CVA6Cfg.WtDcacheWbufDepth-1:0] dirty;
+  logic [CVA6Cfg.WtDcacheWbufDepth-1:0] tocheck;
+  logic [CVA6Cfg.WtDcacheWbufDepth-1:0] wbuffer_hit_oh, inval_hit;
+  //logic     [CVA6Cfg.WtDcacheWbufDepth-1:0][7:0]    bdirty;
+  logic [CVA6Cfg.WtDcacheWbufDepth-1:0][(CVA6Cfg.XLEN/8)-1:0] bdirty;
+
+  logic [$clog2(CVA6Cfg.WtDcacheWbufDepth)-1:0]
+      next_ptr, dirty_ptr, hit_ptr, wr_ptr, check_ptr_d, check_ptr_q, check_ptr_q1, rtrn_ptr;
+  logic [CVA6Cfg.MEM_TID_WIDTH-1:0] tx_id, rtrn_id;
+
+  logic [CVA6Cfg.XLEN_ALIGN_BYTES-1:0] bdirty_off;
+  logic [(CVA6Cfg.XLEN/8)-1:0] tx_be;
+  logic [CVA6Cfg.PLEN-1:0] wr_paddr, rd_paddr, extract_tag;
+  logic [CVA6Cfg.DCACHE_TAG_WIDTH-1:0] rd_tag_d, rd_tag_q;
+  logic [CVA6Cfg.DCACHE_SET_ASSOC-1:0] rd_hit_oh_d, rd_hit_oh_q;
+  logic check_en_d, check_en_q, check_en_q1;
+  logic full, dirty_rd_en, rdy;
+  logic rtrn_empty, evict;
+  logic [CVA6Cfg.WtDcacheWbufDepth-1:0] ni_pending_d, ni_pending_q;
+  logic wbuffer_wren;
+  logic free_tx_slots;
+
+  logic wr_cl_vld_q, wr_cl_vld_d;
+  logic [DCACHE_CL_IDX_WIDTH-1:0] wr_cl_idx_q, wr_cl_idx_d;
+
+  logic [CVA6Cfg.PLEN-1:0] debug_paddr[CVA6Cfg.WtDcacheWbufDepth-1:0];
+
+  wbuffer_t wbuffer_check_mux, wbuffer_dirty_mux;
+
+  ///////////////////////////////////////////////////////
+  // misc
+  ///////////////////////////////////////////////////////
+  logic [CVA6Cfg.DCACHE_TAG_WIDTH-1:0] miss_tag;
+  logic is_nc_miss;
+  logic is_ni;
+  assign miss_tag = miss_paddr_o[CVA6Cfg.DCACHE_INDEX_WIDTH+:CVA6Cfg.DCACHE_TAG_WIDTH];
+  assign is_nc_miss = !config_pkg::is_inside_cacheable_regions(
+      CVA6Cfg,
+      {
+        {64 - CVA6Cfg.DCACHE_TAG_WIDTH - CVA6Cfg.DCACHE_INDEX_WIDTH{1'b0}},
+        miss_tag,
+        {CVA6Cfg.DCACHE_INDEX_WIDTH{1'b0}}
+      }
+  );
+  assign miss_nc_o = !cache_en_i || is_nc_miss;
+  // Non-idempotent if request goes to NI region
+  assign is_ni = config_pkg::is_inside_nonidempotent_regions(
+      CVA6Cfg,
+      {
+        {64 - CVA6Cfg.DCACHE_TAG_WIDTH - CVA6Cfg.DCACHE_INDEX_WIDTH{1'b0}},
+        req_port_i.address_tag,
+        {CVA6Cfg.DCACHE_INDEX_WIDTH{1'b0}}
+      }
+  );
+
+  assign miss_we_o = 1'b1;
+  assign miss_vld_bits_o = '0;
+  assign wbuffer_data_o = wbuffer_q;
+
+  for (genvar k = 0; k < CVA6Cfg.DCACHE_MAX_TX; k++) begin : gen_tx_vld
+    assign tx_vld_o[k] = tx_stat_q[k].vld;
+    assign tx_paddr_o[k] = {
+      {CVA6Cfg.XLEN_ALIGN_BYTES{1'b0}}, wbuffer_q[tx_stat_q[k].ptr].wtag << CVA6Cfg.XLEN_ALIGN_BYTES
+    };
+  end
+
+  ///////////////////////////////////////////////////////
+  // openpiton does not understand byte enable sigs
+  // need to convert to the four cases:
+  // 00: byte
+  // 01: halfword
+  // 10: word
+  // 11: dword
+  // non-contiguous writes need to be serialized!
+  // e.g. merged dwords with BE like this: 8'b01001100
+  ///////////////////////////////////////////////////////
+
+  // get byte offset
+  lzc #(
+      .WIDTH(CVA6Cfg.XLEN / 8)
+  ) i_vld_bdirty (
+      .in_i   (bdirty[dirty_ptr]),
+      .cnt_o  (bdirty_off),
+      .empty_o()
+  );
+
+  // add the offset to the physical base address of this buffer entry
+  assign miss_paddr_o = {wbuffer_dirty_mux.wtag, bdirty_off};
+  assign miss_id_o = tx_id;
+
+  // is there any dirty word to be transmitted, and is there a free TX slot?
+  assign miss_req_o = (|dirty) && free_tx_slots;
+
+  // get size of aligned words, and the corresponding byte enables
+  // note: openpiton can only handle aligned offsets + size, and hence
+  // we have to split unaligned data into multiple transfers (see toSize64)
+  // e.g. if we have the following valid bytes: 0011_1001 -> TX0: 0000_0001, TX1: 0000_1000, TX2: 0011_0000
+  if (CVA6Cfg.IS_XLEN64) begin : gen_size_64b
+    assign miss_size_o = {1'b0, toSize64(bdirty[dirty_ptr])};
+  end else begin : gen_size_32b
+    assign miss_size_o = {1'b0, toSize32(bdirty[dirty_ptr])};
+  end
+
+  // replicate transfers shorter than a dword
+  assign miss_wdata_o = CVA6Cfg.IS_XLEN64 ? repData64(
+      wbuffer_dirty_mux.data, bdirty_off, miss_size_o[1:0]
+  ) : repData32(
+      wbuffer_dirty_mux.data, bdirty_off, miss_size_o[1:0]
+  );
+  if (CVA6Cfg.DATA_USER_EN) begin
+    assign miss_wuser_o = CVA6Cfg.IS_XLEN64 ? repData64(
+        wbuffer_dirty_mux.user, bdirty_off, miss_size_o[1:0]
+    ) : repData32(
+        wbuffer_dirty_mux.user, bdirty_off, miss_size_o[1:0]
+    );
+  end else begin
+    assign miss_wuser_o = '0;
+  end
+
+  assign tx_be = CVA6Cfg.IS_XLEN64 ? to_byte_enable8(
+      bdirty_off, miss_size_o[1:0]
+  ) : to_byte_enable4(
+      bdirty_off, miss_size_o[1:0]
+  );
+
+  ///////////////////////////////////////////////////////
+  // TX status registers and ID counters
+  ///////////////////////////////////////////////////////
+
+  // TODO: todo: make this fall through if timing permits it
+  cva6_fifo_v3 #(
+      .FALL_THROUGH(1'b0),
+      .DATA_WIDTH  ($clog2(CVA6Cfg.DCACHE_MAX_TX)),
+      .DEPTH       (CVA6Cfg.DCACHE_MAX_TX),
+      .FPGA_EN     (CVA6Cfg.FpgaEn)
+  ) i_rtrn_id_fifo (
+      .clk_i     (clk_i),
+      .rst_ni    (rst_ni),
+      .flush_i   (1'b0),
+      .testmode_i(1'b0),
+      .full_o    (),
+      .empty_o   (rtrn_empty),
+      .usage_o   (),
+      .data_i    (miss_rtrn_id_i),
+      .push_i    (miss_rtrn_vld_i),
+      .data_o    (rtrn_id),
+      .pop_i     (evict)
+  );
+
+  always_comb begin : p_tx_stat
+    tx_stat_d = tx_stat_q;
+    evict     = 1'b0;
+    wr_req_o  = '0;
+
+    // clear entry if it is clear whether it can be pushed to the cache or not
+    if ((!rtrn_empty) && wbuffer_q[rtrn_ptr].checked) begin
+      // check if data is clean and can be written, otherwise skip
+      // check if CL is present, otherwise skip
+      if ((|wr_data_be_o) && (|wbuffer_q[rtrn_ptr].hit_oh)) begin
+        wr_req_o = wbuffer_q[rtrn_ptr].hit_oh;
+        if (wr_ack_i) begin
+          evict    = 1'b1;
+          tx_stat_d[rtrn_id].vld = 1'b0;
+        end
+      end else begin
+        evict = 1'b1;
+        tx_stat_d[rtrn_id].vld = 1'b0;
+      end
+    end
+
+    // allocate a new entry
+    if (dirty_rd_en) begin
+      tx_stat_d[tx_id].vld = 1'b1;
+      tx_stat_d[tx_id].ptr = dirty_ptr;
+      tx_stat_d[tx_id].be  = tx_be;
+    end
+  end
+
+  assign free_tx_slots = |(~tx_vld_o);
+
+  // next word to lookup in the cache
+  rr_arb_tree #(
+      .NumIn    (CVA6Cfg.DCACHE_MAX_TX),
+      .LockIn   (1'b1),
+      .DataWidth(1)
+  ) i_tx_id_rr (
+      .clk_i  (clk_i),
+      .rst_ni (rst_ni),
+      .flush_i('0),
+      .rr_i   ('0),
+      .req_i  (~tx_vld_o),
+      .gnt_o  (),
+      .data_i ('0),
+      .gnt_i  (dirty_rd_en),
+      .req_o  (),
+      .data_o (),
+      .idx_o  (tx_id)
+  );
+
+  ///////////////////////////////////////////////////////
+  // cache readout & update
+  ///////////////////////////////////////////////////////
+
+  assign extract_tag = rd_paddr >> CVA6Cfg.DCACHE_INDEX_WIDTH;
+  assign rd_tag_d = extract_tag[CVA6Cfg.DCACHE_TAG_WIDTH-1:0];
+
+  // trigger TAG readout in cache
+  assign rd_tag_only_o = 1'b1;
+  assign rd_paddr = {
+    {CVA6Cfg.XLEN_ALIGN_BYTES{1'b0}}, wbuffer_check_mux.wtag << CVA6Cfg.XLEN_ALIGN_BYTES
+  };
+  assign rd_req_o = |tocheck;
+  assign rd_tag_o = rd_tag_q;  //delay by one cycle
+  assign rd_idx_o = rd_paddr[CVA6Cfg.DCACHE_INDEX_WIDTH-1:CVA6Cfg.DCACHE_OFFSET_WIDTH];
+  assign rd_off_o = rd_paddr[CVA6Cfg.DCACHE_OFFSET_WIDTH-1:0];
+  assign check_en_d = rd_req_o & rd_ack_i;
+
+  // cache update port
+  assign rtrn_ptr = tx_stat_q[rtrn_id].ptr;
+  // if we wrote into a word while it was in-flight, we cannot write the dirty bytes to the cache
+  // when the TX returns
+  assign wr_data_be_o = tx_stat_q[rtrn_id].be & (~wbuffer_q[rtrn_ptr].dirty);
+  assign wr_paddr = {
+    {CVA6Cfg.XLEN_ALIGN_BYTES{1'b0}}, wbuffer_q[rtrn_ptr].wtag << CVA6Cfg.XLEN_ALIGN_BYTES
+  };
+  assign wr_idx_o = wr_paddr[CVA6Cfg.DCACHE_INDEX_WIDTH-1:CVA6Cfg.DCACHE_OFFSET_WIDTH];
+  assign wr_off_o = wr_paddr[CVA6Cfg.DCACHE_OFFSET_WIDTH-1:0];
+  assign wr_data_o = wbuffer_q[rtrn_ptr].data;
+  assign wr_user_o = wbuffer_q[rtrn_ptr].user;
+
+
+  ///////////////////////////////////////////////////////
+  // readout of status bits, index calculation
+  ///////////////////////////////////////////////////////
+
+  logic [CVA6Cfg.WtDcacheWbufDepth-1:0][DCACHE_CL_IDX_WIDTH-1:0] wtag_comp;
+
+  assign wr_cl_vld_d = wr_cl_vld_i;
+  assign wr_cl_idx_d = wr_cl_idx_i;
+
+  for (genvar k = 0; k < CVA6Cfg.WtDcacheWbufDepth; k++) begin : gen_flags
+    // only for debug, will be pruned
+    if (CVA6Cfg.DebugEn) begin
+      assign debug_paddr[k] = {
+        {CVA6Cfg.XLEN_ALIGN_BYTES{1'b0}}, wbuffer_q[k].wtag << CVA6Cfg.XLEN_ALIGN_BYTES
+      };
+    end
+
+    // dirty bytes that are ready for transmission.
+    // note that we cannot retransmit a word that is already in-flight
+    // since the multiple transactions might overtake each other in the memory system!
+    assign bdirty[k] = (|wbuffer_q[k].txblock) ? '0 : wbuffer_q[k].dirty & wbuffer_q[k].valid;
+
+
+    assign dirty[k] = |bdirty[k];
+    assign valid[k] = |wbuffer_q[k].valid;
+    assign wbuffer_hit_oh[k] = valid[k] & (wbuffer_q[k].wtag == {req_port_i.address_tag, req_port_i.address_index[CVA6Cfg.DCACHE_INDEX_WIDTH-1:CVA6Cfg.XLEN_ALIGN_BYTES]});
+
+    // checks if an invalidation/cache refill hits a particular word
+    // note: an invalidation can hit multiple words!
+    // need to respect previous cycle, too, since we add a cycle of latency to the rd_hit_oh_i signal...
+    assign wtag_comp[k] = wbuffer_q[k].wtag[CVA6Cfg.DCACHE_INDEX_WIDTH-CVA6Cfg.XLEN_ALIGN_BYTES-1:CVA6Cfg.DCACHE_OFFSET_WIDTH-CVA6Cfg.XLEN_ALIGN_BYTES];
+    assign inval_hit[k]  = (wr_cl_vld_d & valid[k] & (wtag_comp[k] == wr_cl_idx_d)) |
+                           (wr_cl_vld_q & valid[k] & (wtag_comp[k] == wr_cl_idx_q));
+
+    // these word have to be looked up in the cache
+    assign tocheck[k] = (~wbuffer_q[k].checked) & valid[k];
+  end
+
+  assign wr_ptr = (|wbuffer_hit_oh) ? hit_ptr : next_ptr;
+  assign rdy    = (|wbuffer_hit_oh) | (~full);
+
+  // next free entry in the buffer
+  lzc #(
+      .WIDTH(CVA6Cfg.WtDcacheWbufDepth)
+  ) i_vld_lzc (
+      .in_i   (~valid),
+      .cnt_o  (next_ptr),
+      .empty_o(full)
+  );
+
+  // get index of hit
+  lzc #(
+      .WIDTH(CVA6Cfg.WtDcacheWbufDepth)
+  ) i_hit_lzc (
+      .in_i   (wbuffer_hit_oh),
+      .cnt_o  (hit_ptr),
+      .empty_o()
+  );
+
+  // next dirty word to serve
+  rr_arb_tree #(
+      .NumIn   (CVA6Cfg.WtDcacheWbufDepth),
+      .LockIn  (1'b1),
+      .DataType(wbuffer_t)
+  ) i_dirty_rr (
+      .clk_i  (clk_i),
+      .rst_ni (rst_ni),
+      .flush_i('0),
+      .rr_i   ('0),
+      .req_i  (dirty),
+      .gnt_o  (),
+      .data_i (wbuffer_q),
+      .gnt_i  (dirty_rd_en),
+      .req_o  (),
+      .data_o (wbuffer_dirty_mux),
+      .idx_o  (dirty_ptr)
+  );
+
+  // next word to lookup in the cache
+  rr_arb_tree #(
+      .NumIn   (CVA6Cfg.WtDcacheWbufDepth),
+      .DataType(wbuffer_t)
+  ) i_clean_rr (
+      .clk_i  (clk_i),
+      .rst_ni (rst_ni),
+      .flush_i('0),
+      .rr_i   ('0),
+      .req_i  (tocheck),
+      .gnt_o  (),
+      .data_i (wbuffer_q),
+      .gnt_i  (check_en_d),
+      .req_o  (),
+      .data_o (wbuffer_check_mux),
+      .idx_o  (check_ptr_d)
+  );
+
+  ///////////////////////////////////////////////////////
+  // update logic
+  ///////////////////////////////////////////////////////
+
+  assign req_port_o.data_rvalid = '0;
+  assign req_port_o.data_rdata  = '0;
+  assign req_port_o.data_ruser  = '0;
+  assign req_port_o.data_rid    = '0;
+
+  assign rd_hit_oh_d = rd_hit_oh_i;
+
+  logic ni_inside, ni_conflict;
+  assign ni_inside = |ni_pending_q;
+  assign ni_conflict = CVA6Cfg.NonIdemPotenceEn && is_ni && ni_inside;
+  assign not_ni_o = !ni_inside;
+  assign empty_o    = !(|valid);
+
+  // TODO: rewrite and separate into MUXES and write strobe logic
+  always_comb begin : p_buffer
+    wbuffer_d           = wbuffer_q;
+    ni_pending_d        = ni_pending_q;
+    dirty_rd_en         = 1'b0;
+    req_port_o.data_gnt = 1'b0;
+    wbuffer_wren        = 1'b0;
+
+    // TAG lookup returns, mark corresponding word
+    if (check_en_q1) begin
+      if (|wbuffer_q[check_ptr_q1].valid) begin
+        wbuffer_d[check_ptr_q1].checked = 1'b1;
+        wbuffer_d[check_ptr_q1].hit_oh  = rd_hit_oh_q;
+      end
+    end
+
+    // if an invalidation or cache line refill comes in and hits on the write buffer,
+    // we have to discard our knowledge of the corresponding cacheline state
+    for (int k = 0; k < CVA6Cfg.WtDcacheWbufDepth; k++) begin
+      if (inval_hit[k]) begin
+        wbuffer_d[k].checked = 1'b0;
+      end
+    end
+
+    // once TX write response came back, we can clear the TX block. if it was not dirty, we
+    // can completely evict it - otherwise we have to leave it there for retransmission
+    if (evict) begin
+      for (int k = 0; k < (CVA6Cfg.XLEN / 8); k++) begin
+        if (tx_stat_q[rtrn_id].be[k]) begin
+          wbuffer_d[rtrn_ptr].txblock[k] = 1'b0;
+          if (!wbuffer_q[rtrn_ptr].dirty[k]) begin
+            wbuffer_d[rtrn_ptr].valid[k] = 1'b0;
+
+            // NOTE: this is not strictly needed, but makes it much
+            // easier to debug, since no invalid data remains in the buffer
+            // wbuffer_d[rtrn_ptr].data[k*8 +:8] = '0;
+          end
+        end
+      end
+      // if all bytes are evicted, clear the cache status flag
+      if (wbuffer_d[rtrn_ptr].valid == 0) begin
+        wbuffer_d[rtrn_ptr].checked = 1'b0;
+        ni_pending_d[rtrn_ptr] = 1'b0;
+      end
+    end
+
+    // mark bytes sent out to the memory system
+    if (miss_req_o && miss_ack_i) begin
+      dirty_rd_en = 1'b1;
+      for (int k = 0; k < (CVA6Cfg.XLEN / 8); k++) begin
+        if (tx_be[k]) begin
+          wbuffer_d[dirty_ptr].dirty[k]   = 1'b0;
+          wbuffer_d[dirty_ptr].txblock[k] = 1'b1;
+        end
+      end
+    end
+
+    // write new word into the buffer
+    if (req_port_i.data_req && rdy) begin
+      // in case we have an NI address, need to drain the buffer first
+      // in case we are serving an NI address,  we block until it is written to memory
+      if (!ni_conflict) begin  //empty of NI operations
+        wbuffer_wren = 1'b1;
+
+        req_port_o.data_gnt = 1'b1;
+        ni_pending_d[wr_ptr] = is_ni;
+
+        wbuffer_d[wr_ptr].checked = 1'b0;
+        wbuffer_d[wr_ptr].wtag = {
+          req_port_i.address_tag,
+          req_port_i.address_index[CVA6Cfg.DCACHE_INDEX_WIDTH-1:CVA6Cfg.XLEN_ALIGN_BYTES]
+        };
+
+        // mark bytes as dirty
+        for (int k = 0; k < (CVA6Cfg.XLEN / 8); k++) begin
+          if (req_port_i.data_be[k]) begin
+            wbuffer_d[wr_ptr].valid[k]     = 1'b1;
+            wbuffer_d[wr_ptr].dirty[k]     = 1'b1;
+            wbuffer_d[wr_ptr].data[k*8+:8] = req_port_i.data_wdata[k*8+:8];
+            if (CVA6Cfg.DATA_USER_EN) begin
+              wbuffer_d[wr_ptr].user[k*8+:8] = req_port_i.data_wuser[k*8+:8];
+            end else begin
+              wbuffer_d[wr_ptr].user[k*8+:8] = '0;
+            end
+          end
+        end
+      end
+    end
+  end
+
+
+  ///////////////////////////////////////////////////////
+  // ff's
+  ///////////////////////////////////////////////////////
+
+  always_ff @(posedge clk_i or negedge rst_ni) begin : p_regs
+    if (!rst_ni) begin
+      wbuffer_q    <= '{default: '0};
+      tx_stat_q    <= '{default: '0};
+      ni_pending_q <= '0;
+      check_ptr_q  <= '0;
+      check_ptr_q1 <= '0;
+      check_en_q   <= '0;
+      check_en_q1  <= '0;
+      rd_tag_q     <= '0;
+      rd_hit_oh_q  <= '0;
+      wr_cl_vld_q  <= '0;
+      wr_cl_idx_q  <= '0;
+    end else begin
+      wbuffer_q    <= wbuffer_d;
+      tx_stat_q    <= tx_stat_d;
+      ni_pending_q <= ni_pending_d;
+      check_ptr_q  <= check_ptr_d;
+      check_ptr_q1 <= check_ptr_q;
+      check_en_q   <= check_en_d;
+      check_en_q1  <= check_en_q;
+      rd_tag_q     <= rd_tag_d;
+      rd_hit_oh_q  <= rd_hit_oh_d;
+      wr_cl_vld_q  <= wr_cl_vld_d;
+      wr_cl_idx_q  <= wr_cl_idx_d;
+    end
+  end
+
+
+  ///////////////////////////////////////////////////////
+  // assertions
+  ///////////////////////////////////////////////////////
+
+  //pragma translate_off
+`ifndef VERILATOR
+
+  hot1 :
+  assert property (@(posedge clk_i) disable iff (!rst_ni) req_port_i.data_req |-> $onehot0(
+      wbuffer_hit_oh
+  ))
+  else $fatal(1, "[l1 dcache wbuffer] wbuffer_hit_oh signal must be hot1");
+
+  tx_status :
+  assert property (
+    @(posedge clk_i) disable iff (!rst_ni) evict && miss_ack_i && miss_req_o |-> (tx_id != rtrn_id))
+  else $fatal(1, "[l1 dcache wbuffer] cannot allocate and clear same tx slot id in the same cycle");
+
+  tx_valid0 :
+  assert property (@(posedge clk_i) disable iff (!rst_ni) evict |-> tx_stat_q[rtrn_id].vld)
+  else $fatal(1, "[l1 dcache wbuffer] evicting invalid transaction slot");
+
+  tx_valid1 :
+  assert property (@(posedge clk_i) disable iff (!rst_ni) evict |-> |wbuffer_q[rtrn_ptr].valid)
+  else $fatal(1, "[l1 dcache wbuffer] wbuffer entry corresponding to this transaction is invalid");
+
+  write_full :
+  assert property (
+    @(posedge clk_i) disable iff (!rst_ni) req_port_i.data_req |-> req_port_o.data_gnt |-> ((!full) || (|wbuffer_hit_oh)))
+  else $fatal(1, "[l1 dcache wbuffer] cannot write if full or no hit");
+
+  unused0 :
+  assert property (@(posedge clk_i) disable iff (!rst_ni) !req_port_i.tag_valid)
+  else $fatal(1, "[l1 dcache wbuffer] req_port_i.tag_valid should not be asserted");
+
+  unused1 :
+  assert property (@(posedge clk_i) disable iff (!rst_ni) !req_port_i.kill_req)
+  else $fatal(1, "[l1 dcache wbuffer] req_port_i.kill_req should not be asserted");
+
+  for (genvar k = 0; k < CVA6Cfg.WtDcacheWbufDepth; k++) begin : gen_assert1
+    for (genvar j = 0; j < (CVA6Cfg.XLEN / 8); j++) begin : gen_assert2
+      byteStates :
+      assert property (
+        @(posedge clk_i) disable iff (!rst_ni) {wbuffer_q[k].valid[j], wbuffer_q[k].dirty[j], wbuffer_q[k].txblock[j]} inside {3'b000, 3'b110, 3'b101, 3'b111} )
+      else
+        $fatal(
+            1,
+            "[l1 dcache wbuffer] byte %02d of wbuffer entry %02d has invalid state: valid=%01b, dirty=%01b, txblock=%01b",
+            j,
+            k,
+            wbuffer_q[k].valid[j],
+            wbuffer_q[k].dirty[j],
+            wbuffer_q[k].txblock[j]
+        );
+    end
+  end
+`endif
+  //pragma translate_on
+
+endmodule  // wt_dcache_wbuffer
