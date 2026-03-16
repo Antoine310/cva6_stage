@@ -1173,8 +1173,8 @@ module cva6
     ) timewarp_i (
         .clk_i         (clk_i),
         .rst_ni        (rst_ni),
-        .lecture_cycle (csr_lecture_cycle_regfile),
-        .dcache_hit_i (dcache_hit_cache),
+        .csr_lecture_cycle (csr_lecture_cycle_regfile),
+        .dcache_hit_i  (dcache_hit_cache),
         .protect_en_o  (protect_en_commit)
     );
   // ------------------------

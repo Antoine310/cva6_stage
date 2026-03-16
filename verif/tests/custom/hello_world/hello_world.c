@@ -28,5 +28,11 @@ int main(int argc, char* arg[]) {
 	{
 		a += i;
 	}
+	uint64_t t;
+
+	asm volatile("csrr %0, cycle" : "=r"(t));
+
+	printf("%ld\n", t);
+	
 	return 0;
 }
