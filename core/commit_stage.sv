@@ -89,7 +89,10 @@ module commit_stage
     // TO_BE_COMPLETED - CONTROLLER
     output logic hfence_gvma_o,
     // Flag Hit + read CSR 
-    input logic protect_en_i
+    input logic protect_en_i,
+    // COMMIT LOAD 
+    output logic load_commit_o
+
 );
 
   // ila_0 i_ila_commit (
@@ -125,13 +128,22 @@ module commit_stage
 
   assign commit_tran_id_o = commit_instr_i[0].trans_id;
 
+  assign load_commit_o = (commit_instr_i[0].valid && commit_ack_o[0] && commit_instr_i[0].fu == LOAD);
+  assign load_invalid_o =
+  (commit_instr_i[0].valid &&
+   commit_instr_i[0].fu == LOAD &&
+   (
+     commit_drop_i[0] ||           // flush / kill
+     commit_instr_i[0].ex.valid || // exception
+     !commit_ack_o[0]              // pas accepté (stall / blocage)
+   ));
   logic instr_0_is_amo;
   logic [CVA6Cfg.NrCommitPorts-1:0] commit_macro_ack;
   assign instr_0_is_amo = is_amo(commit_instr_i[0].op);
   // -------------------
   // Commit Instruction
   // -------------------
-  // write register file or commit instruction in LSU or CSR Buffer
+  // write register file or commit instruction in LSU or CSR BufferZ
   always_comb begin : commit
     // default assignments
     commit_ack_o[0] = 1'b0;

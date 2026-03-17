@@ -566,6 +566,7 @@ module cva6
   //Protect 
   logic csr_lecture_cycle_regfile;
   logic protect_en_commit;
+  logic load_commit_timewarp;
 
   // ----------------------------
   // Performance Counters <-> *
@@ -1073,7 +1074,8 @@ module cva6
       .sfence_vma_o      (sfence_vma_commit_controller),
       .hfence_vvma_o     (hfence_vvma_commit_controller),
       .hfence_gvma_o     (hfence_gvma_commit_controller),
-      .protect_en_i      (protect_en_commit)
+      .protect_en_i      (protect_en_commit),
+      .load_commit_o      (load_commit_timewarp)
   );
 
   assign commit_ack = commit_macro_ack & ~commit_drop_id_commit;
@@ -1172,12 +1174,13 @@ module cva6
         .CVA6Cfg(CVA6Cfg),
         .dcache_req_o_t(dcache_req_o_t)
     ) timewarp_i (
-        .clk_i         (clk_i),
-        .rst_ni        (rst_ni),
-        .csr_lecture_cycle (csr_lecture_cycle_regfile),
-        .dcache_hit_i  (dcache_hit_cache),
-        .dcache_req_i  (dcache_req_ports_cache_ex),
-        .protect_en_o  (protect_en_commit)
+        .clk_i              (clk_i),
+        .rst_ni             (rst_ni),
+        .csr_lecture_cycle  (csr_lecture_cycle_regfile),
+        .dcache_hit_i       (dcache_hit_cache),
+        .dcache_req_i       (dcache_req_ports_cache_ex),
+        .load_commit_i      (load_commit_timewarp),
+        .protect_en_o       (protect_en_commit)
     );
   // ------------------------
   // Performance Counters

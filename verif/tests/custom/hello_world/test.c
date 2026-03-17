@@ -1,5 +1,6 @@
 
 volatile int array[1] = {1};
+volatile int biss[1] = {1};
 
 int main() {
 
@@ -13,6 +14,11 @@ int main() {
         "csrr x12, cycle\n"
 
         "lw x10, 0(t0)\n"
+        "csrr x12, cycle\n"
+
+        "la t0, biss\n"
+        "lw x10, 0(t0)\n"
+        "lw x11, 0(t0)\n"
         "csrr x12, cycle\n"
         :
         :
