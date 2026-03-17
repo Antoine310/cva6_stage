@@ -4,7 +4,7 @@ module timewarp
   import ariane_pkg::*;
 #(
     parameter config_pkg::cva6_cfg_t CVA6Cfg = config_pkg::cva6_cfg_empty,
-    parameter int HIT_TIME = 100,
+    parameter int HIT_TIME = 10,
     parameter int STALL_COMMIT= 10
 ) (
     // Subsystem Clock - SUBSYSTEM
@@ -66,6 +66,40 @@ module timewarp
         end 
     end
 
+    logic protect_en_q;
+    logic hit_en_q;
+    logic dcache_hit_q;
+    logic csr_cycle_q;
 
+    int nb_cycle;
+
+    always_ff @(posedge clk_i or negedge rst_ni) begin
+        if (!rst_ni) begin
+            protect_en_q <= 0;
+            hit_en_q <= 0;
+            dcache_hit_q <= 0;
+            csr_cycle_q <= 0;
+            nb_cycle <= 0;
+        end else begin
+
+            if (protect_en_o != protect_en_q)
+                $display("[cycle %0d] protect_en_o -> %0b \n", nb_cycle, protect_en_o);
+
+            if (hit_en != hit_en_q)
+                $display("[cycle %0d] hit_en -> %0b \n ", nb_cycle, hit_en);
+
+           
+            if (csr_lecture_cycle != csr_cycle_q)
+                $display("[cycle %0d] csr_lecture_cycle -> %0b \n" , nb_cycle, csr_lecture_cycle);
+
+            protect_en_q <= protect_en_o;
+            hit_en_q <= hit_en;
+            dcache_hit_q <= dcache_hit_i;
+            csr_cycle_q <= csr_lecture_cycle;
+
+            nb_cycle <= nb_cycle + 1;
+
+        end
+    end
 
 endmodule 
