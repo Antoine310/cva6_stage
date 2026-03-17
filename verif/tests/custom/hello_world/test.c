@@ -15,6 +15,9 @@ int main() {
 
         "lw x10, 0(t0)\n"
         "csrr x12, cycle\n"
+        "csrr x12, cycle\n"
+        "csrr x12, cycle\n"
+        "csrr x12, cycle\n"
 
         "la t0, biss\n"
         "lw x10, 0(t0)\n"

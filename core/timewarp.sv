@@ -20,6 +20,8 @@ module timewarp
     input dcache_req_o_t [2:0] dcache_req_i,
     // Load commit 
     input logic load_commit_i,
+    // Load invalid du commit  
+    input logic load_invalid_i,
     // Lock commit 
     output logic protect_en_o
 );
@@ -49,14 +51,19 @@ module timewarp
             compteur_stall <= '0;
             dcache_hit_q <= '0;
         end else begin 
-            // dcache_hit_q = dcache_hit_q + dcache_hit_i - ((dcache_hit_q>0) && load_commit_i)
-            if(((dcache_hit_q>0) && load_commit_i) && dcache_hit_i) begin
+            dcache_hit_q <= dcache_hit_q + dcache_hit_i - ((dcache_hit_q>0) && load_commit_i) - ((dcache_hit_q>0) && load_invalid_i);
+            /*
+            if(((dcache_hit_q>0) && load_invalid_i) && dcache_hit_i) begin // Un hit + commit hit invalid
                 dcache_hit_q <= dcache_hit_q ;
-            end else if (dcache_hit_i) begin
+            end else if(((dcache_hit_q>0) && load_commit_i) && dcache_hit_i) begin // Un hit + commit hit valid
+                dcache_hit_q <= dcache_hit_q ;
+            end else if (dcache_hit_i) begin // Un hit 
                 dcache_hit_q <= dcache_hit_q + 1 ;
-            end else if ((dcache_hit_q>0) && load_commit_i) begin
+            end else if ((dcache_hit_q>0) && load_commit_i) begin // Un Commit Hit Valid  
                 dcache_hit_q <= dcache_hit_q - 1 ;
-            end 
+            end else if ((dcache_hit_q>0) && load_invalid_i)begin // Un Commit Hit Invalid   
+                dcache_hit_q <= dcache_hit_q - 1 ;
+            end */
 
             if ((dcache_hit_q>0) && load_commit_i) begin
                 hit_en <= 1'b1; 
