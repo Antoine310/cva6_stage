@@ -8,13 +8,15 @@ int main() {
 
     asm volatile(
         "la t0, array\n"
-        //"lw %0, 0(t0)\n"
-        //"lw %1, 0(t0)\n"
-        "csrr %2, cycle\n"
-        : "=r"(a), "=r"(b), "=r"(t)
-        :
-        : "t0", "memory"
-    );
+        "lw x10, 0(t0)\n"
+        "lw x11, 0(t0)\n"
+        "csrr x12, cycle\n"
 
+        "lw x10, 0(t0)\n"
+        "csrr x12, cycle\n"
+        :
+        :
+        : "t0", "x10", "x11", "x12", "memory"
+    );
     return 0;
 }

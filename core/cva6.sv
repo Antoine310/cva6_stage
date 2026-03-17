@@ -1170,11 +1170,13 @@ module cva6
   // ------------------------
     timewarp #(
         .CVA6Cfg(CVA6Cfg),
+        .dcache_req_o_t(dcache_req_o_t)
     ) timewarp_i (
         .clk_i         (clk_i),
         .rst_ni        (rst_ni),
         .csr_lecture_cycle (csr_lecture_cycle_regfile),
         .dcache_hit_i  (dcache_hit_cache),
+        .dcache_req_i  (dcache_req_ports_cache_ex),
         .protect_en_o  (protect_en_commit)
     );
   // ------------------------

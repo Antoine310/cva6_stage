@@ -4,6 +4,7 @@ module timewarp
   import ariane_pkg::*;
 #(
     parameter config_pkg::cva6_cfg_t CVA6Cfg = config_pkg::cva6_cfg_empty,
+    parameter type dcache_req_o_t = logic,
     parameter int HIT_TIME = 10,
     parameter int STALL_COMMIT= 10
 ) (
@@ -13,8 +14,10 @@ module timewarp
     input logic rst_ni,
     // Lecture du cycle en cours dans csr_regfile 
     input logic csr_lecture_cycle,
-    // Miss du Dcache 
+    // HIT du Dcache 
     input logic dcache_hit_i,
+    // Requete du Dcache 
+    input dcache_req_o_t [2:0] dcache_req_i,
     // Lock commit 
     output logic protect_en_o
 );
@@ -82,13 +85,21 @@ module timewarp
             nb_cycle <= 0;
         end else begin
 
+            if (dcache_req_i[1].data_rvalid) begin
+                $display("[cycle %0d] LOAD RETURN TIMEWARP-> rid=%0d | dcache_hit_i=%0b | hit_en(cur)=%0b | csr_cycle=%0b | protect=%0b",
+                        nb_cycle,
+                        dcache_req_i[1].data_rid,
+                        dcache_hit_i,
+                        hit_en,
+                        csr_lecture_cycle,
+                        protect_en_o);
+            end
             if (protect_en_o != protect_en_q)
                 $display("[cycle %0d] protect_en_o -> %0b \n", nb_cycle, protect_en_o);
 
             if (hit_en != hit_en_q)
                 $display("[cycle %0d] hit_en -> %0b \n ", nb_cycle, hit_en);
 
-           
             if (csr_lecture_cycle != csr_cycle_q)
                 $display("[cycle %0d] csr_lecture_cycle -> %0b \n" , nb_cycle, csr_lecture_cycle);
 
