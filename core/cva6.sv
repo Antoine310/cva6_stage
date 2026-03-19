@@ -566,6 +566,7 @@ module cva6
   //Protect 
   logic csr_lecture_cycle_regfile;
   logic protect_en_commit;
+  logic charge_csr;
   logic load_commit_timewarp;
   logic load_invalid_timewarp;
 
@@ -1166,7 +1167,8 @@ module cva6
       .mcountinhibit_o         (mcountinhibit_csr_perf),
       //RVFI
       .rvfi_csr_o              (rvfi_csr),
-      .csr_lecture_cycle       (csr_lecture_cycle_regfile)
+      .csr_lecture_cycle       (csr_lecture_cycle_regfile),
+      .charge_csr_i            (charge_csr)
   );
 
   // ------------------------
@@ -1183,7 +1185,8 @@ module cva6
         .dcache_req_i       (dcache_req_ports_cache_ex),
         .load_commit_i      (load_commit_timewarp),
         .load_invalid_i     (load_invalid_timewarp),
-        .protect_en_o       (protect_en_commit)
+        .protect_en_o       (protect_en_commit),
+        .charge_o           (charge_csr)
     );
   // ------------------------
   // Performance Counters

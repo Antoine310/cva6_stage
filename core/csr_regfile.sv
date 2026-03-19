@@ -169,7 +169,10 @@ module csr_regfile
     // RVFI
     output rvfi_probes_csr_t rvfi_csr_o,
     // Protect
-    output logic csr_lecture_cycle
+    output logic csr_lecture_cycle,
+
+    input logic charge_csr_i
+
 );
 
   localparam logic [63:0] SMODE_STATUS_READ_MASK = ariane_pkg::smode_status_read_mask(CVA6Cfg);
@@ -566,7 +569,7 @@ module csr_regfile
         else read_access_exception = 1'b1;
         riscv::CSR_CYCLE: //Protect
         if (CVA6Cfg.RVZicntr) begin 
-          csr_rdata = cycle_q[CVA6Cfg.XLEN-1:0];
+          csr_rdata = cycle_q[CVA6Cfg.XLEN-1:0] + charge_csr_i ;
           csr_lecture_cycle = 1'b1;
         end else begin
           read_access_exception = 1'b1;
