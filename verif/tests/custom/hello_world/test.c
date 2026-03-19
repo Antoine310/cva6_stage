@@ -29,3 +29,4 @@ int main() {
     );
     return 0;
 }
+// v2 : 6415 cycles! v1 :  6446 cycles! value=0x1106

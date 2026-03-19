@@ -47,10 +47,11 @@ module timewarp
             charge_d = '0;
             $display("[cycle %0d] Reset de la charge\n", nb_cycle);
         end
+        charge_o = charge_d; 
+
 
     end
     
-    assign charge_o = charge_d; 
 
     always_ff @(posedge clk_i or negedge rst_ni) begin
         if (~rst_ni) begin

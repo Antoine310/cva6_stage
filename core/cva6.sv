@@ -566,7 +566,7 @@ module cva6
   //Protect 
   logic csr_lecture_cycle_regfile;
   logic protect_en_commit;
-  logic charge_csr;
+  logic [6:0] charge_csr;
   logic load_commit_timewarp;
   logic load_invalid_timewarp;
 
