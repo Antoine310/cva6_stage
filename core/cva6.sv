@@ -567,6 +567,7 @@ module cva6
   logic csr_lecture_cycle_regfile;
   logic protect_en_commit;
   logic [6:0] charge_csr;
+  logic hit_en_time;
   logic load_commit_timewarp;
   logic load_invalid_timewarp;
 
@@ -1078,7 +1079,9 @@ module cva6
       .hfence_gvma_o     (hfence_gvma_commit_controller),
       .protect_en_i      (protect_en_commit),
       .load_commit_o     (load_commit_timewarp),
-      .load_invalid_o    (load_invalid_timewarp)
+      .load_invalid_o    (load_invalid_timewarp),
+      .csr_lecture       (csr_lecture_cycle_regfile),
+      .charge_csr_i      (charge_csr)
   );
 
   assign commit_ack = commit_macro_ack & ~commit_drop_id_commit;
@@ -1168,7 +1171,8 @@ module cva6
       //RVFI
       .rvfi_csr_o              (rvfi_csr),
       .csr_lecture_cycle       (csr_lecture_cycle_regfile),
-      .charge_csr_i            (charge_csr)
+      .charge_csr_i            (charge_csr),
+      .hit_en_i                (hit_en_time)
   );
 
   // ------------------------
@@ -1186,7 +1190,8 @@ module cva6
         .load_commit_i      (load_commit_timewarp),
         .load_invalid_i     (load_invalid_timewarp),
         .protect_en_o       (protect_en_commit),
-        .charge_o           (charge_csr)
+        .charge_o           (charge_csr),
+        .hit_en_o           (hit_en_time)
     );
   // ------------------------
   // Performance Counters

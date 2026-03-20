@@ -93,7 +93,12 @@ module commit_stage
     // COMMIT LOAD 
     output logic load_commit_o,
     // COMMIT LOAD INVALID
-    output logic load_invalid_o
+    output logic load_invalid_o,
+    
+    input logic  csr_lecture,
+
+    input logic [6:0] charge_csr_i
+
 );
 
   // ila_0 i_ila_commit (
@@ -221,7 +226,13 @@ module commit_stage
           if (!commit_drop_i[0]) begin
             if (!csr_exception_i.valid) begin // Protect : Check miss + read 
               commit_csr_o = 1'b1;
-              wdata_o[0]   = csr_rdata_i;
+              if (csr_lecture) begin
+                wdata_o[0]   = csr_rdata_i + 10 ;
+                $display("[cycle %0d] Passe par la ? ",nb_cycle);
+              end else begin
+                wdata_o[0]   = csr_rdata_i  ;
+                $display("[cycle %0d] enfaite tes con ",nb_cycle);
+              end 
             end else begin
               commit_ack_o[0] = 1'b0;
               we_gpr_o[0] = 1'b0;
@@ -438,7 +449,7 @@ module commit_stage
               $display("[cycle %0d] CSR COMMIT -> trans_id=%0d | value=0x%0h",
                       nb_cycle,
                       commit_instr_i[0].trans_id,
-                      csr_rdata_i);
+                      wdata_o[0]);
           end
           nb_cycle <= nb_cycle + 1;
       end

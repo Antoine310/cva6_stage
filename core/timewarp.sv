@@ -24,7 +24,9 @@ module timewarp
     // Lock commit 
     output logic protect_en_o,
     // Charge cycle csr_regfile
-    output logic [6:0] charge_o
+    output logic [6:0] charge_o,
+
+    output logic hit_en_o
 );
     logic [$clog2(HIT_TIME+1)-1:0] compteur_hit;
     logic [8:0] compteur_stall;
@@ -34,24 +36,24 @@ module timewarp
 
     logic [6:0] charge_q, charge_d;    
     logic reset_charge;
+    logic hit_now;
+    assign hit_now = (dcache_hit_q > 0) && load_commit_i;
 
     always_comb begin : charge
 
-        charge_d = charge_q;
+        charge_o = charge_q;
         
-        if (hit_en && csr_lecture_cycle) begin 
-            charge_d = charge_d + 10 ; 
-            $display("[cycle %0d] Augmentation de la charge +10\n", nb_cycle);
+        if (csr_lecture_cycle && (hit_now || hit_en)) begin 
+            charge_o = charge_o + 7'd10; 
+            $display("[cycle %0d] Now :)  Augmentation de la charge +10\n", nb_cycle);
         end 
         if (reset_charge) begin
-            charge_d = '0;
+            charge_o = '0;
             $display("[cycle %0d] Reset de la charge\n", nb_cycle);
         end
-        charge_o = charge_d; 
-
-
+        
     end
-    
+    assign charge_d = charge_o ;
 
     always_ff @(posedge clk_i or negedge rst_ni) begin
         if (~rst_ni) begin
@@ -78,7 +80,7 @@ module timewarp
             end */
             charge_q  <= charge_d;
 
-            if ((dcache_hit_q>0) && load_commit_i) begin
+            if (hit_now) begin
                 hit_en <= 1'b1; 
                 compteur_hit <= HIT_TIME[$bits(compteur_hit)-1:0];
             end else if (compteur_hit != 0) begin
@@ -92,10 +94,10 @@ module timewarp
 
             if (hit_en && csr_lecture_cycle) begin 
                 hit_en <= 1'b0; 
-                compteur_stall <= STALL_COMMIT[$bits(compteur_stall)-1:0] + charge_o ;
+                compteur_stall <= STALL_COMMIT[$bits(compteur_stall)-1:0] + charge_q;
                 $display("[cycle %0d] Relance du Timer reset 1 \n", nb_cycle);
             end else if (csr_lecture_cycle) begin
-                compteur_stall <= STALL_COMMIT[$bits(compteur_stall)-1:0] + charge_o ; // + charge ? ou pas 
+                compteur_stall <= STALL_COMMIT[$bits(compteur_stall)-1:0] + charge_q ; // + charge ? ou pas 
                 $display("[cycle %0d] Relance du Timer reset 2\n", nb_cycle);
             end else if (compteur_stall !=  0) begin
                 compteur_stall <= compteur_stall - 1 ; 
@@ -145,7 +147,7 @@ module timewarp
             if (load_commit_i && load_invalid_i )
                 $display("[cycle %0d] erreur load valid et invalid !\n", nb_cycle);
 
-            if (charge_d != charge_q)
+            if (charge_o != charge_q)
                 $display("[cycle %0d] charge_o -> %0d", nb_cycle, charge_o);
 
             hit_en_q <= hit_en;

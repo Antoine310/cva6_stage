@@ -171,7 +171,8 @@ module csr_regfile
     // Protect
     output logic csr_lecture_cycle,
     // Charge rajouter au nombre de cycle en cas de lecture 
-    input logic [6:0] charge_csr_i
+    input logic [6:0] charge_csr_i,
+    input logic  hit_en_i
 
 );
 
@@ -338,6 +339,8 @@ module csr_regfile
     perf_addr_o = csr_addr.address[11:0];
     csr_lecture_cycle = 1'b0;
     inst_timewarp =  instret_q - buffer_q; 
+    cycle_timewarp = cycle_q + charge_csr_i ;
+
     if (csr_read) begin
       unique case (conv_csr_addr.address)
         riscv::CSR_FFLAGS: begin
@@ -573,9 +576,8 @@ module csr_regfile
         if (CVA6Cfg.XLEN == 32) csr_rdata = instret_q[63:32];
         else read_access_exception = 1'b1;
         riscv::CSR_CYCLE: //Protect
-        if (CVA6Cfg.RVZicntr) begin 
-          cycle_timewarp = cycle_q + charge_csr_i ;
-          csr_rdata = cycle_timewarp[CVA6Cfg.XLEN-1:0] ;
+        if (CVA6Cfg.RVZicntr) begin
+          csr_rdata =  cycle_timewarp[CVA6Cfg.XLEN-1:0] +10 ;
           csr_lecture_cycle = 1'b1;
         end else begin
           read_access_exception = 1'b1;
@@ -583,8 +585,7 @@ module csr_regfile
         riscv::CSR_CYCLEH:
         if (CVA6Cfg.RVZicntr) begin
           if (CVA6Cfg.XLEN == 32) begin 
-            cycle_timewarp = cycle_q + charge_csr_i ;
-            csr_rdata = cycle_timewarp[63:32] ;
+            csr_rdata = cycle_q[63:32] ;
             csr_lecture_cycle = 1'b1;
           end else begin 
             read_access_exception = 1'b1;
