@@ -228,7 +228,9 @@ module ex_stage
     // Information dedicated to RVFI - RVFI
     output lsu_ctrl_t rvfi_lsu_ctrl_o,
     // Information dedicated to RVFI - RVFI
-    output [CVA6Cfg.PLEN-1:0] rvfi_mem_paddr_o
+    output [CVA6Cfg.PLEN-1:0] rvfi_mem_paddr_o,
+    // Lecture csr timewarp
+    output logic lecture_csr_o
 );
 
   // -------------------------
@@ -269,7 +271,10 @@ module ex_stage
   logic csr_ready, mult_ready;
   logic [CVA6Cfg.TRANS_ID_BITS-1:0] mult_trans_id;
   logic mult_valid;
-
+  // Protect
+  logic csr_lecture;
+  assign lecture_csr_o = csr_lecture; 
+  
   logic [CVA6Cfg.NrIssuePorts-1:0] one_cycle_select;
   assign one_cycle_select = alu_valid_i | branch_valid_i | csr_valid_i;
 
@@ -343,7 +348,8 @@ module ex_stage
       .csr_ready_o (csr_ready),
       .csr_result_o(csr_result),
       .csr_commit_i,
-      .csr_addr_o
+      .csr_addr_o,
+      .csr_lecture_o (csr_lecture)
   );
 
   assign flu_valid_o = |one_cycle_select | mult_valid;

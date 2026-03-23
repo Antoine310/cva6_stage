@@ -568,6 +568,9 @@ module cva6
   logic protect_en_commit;
   logic load_commit_timewarp;
   logic load_invalid_timewarp;
+  logic csr_commit_time;
+  logic lecture_csr;
+  logic [6:0] time_charge;
 
   // ----------------------------
   // Performance Counters <-> *
@@ -1025,7 +1028,8 @@ module cva6
       .pmpaddr_i               (pmpaddr),
       //RVFI
       .rvfi_lsu_ctrl_o         (rvfi_lsu_ctrl),
-      .rvfi_mem_paddr_o        (rvfi_mem_paddr)
+      .rvfi_mem_paddr_o        (rvfi_mem_paddr),
+      .lecture_csr_o            (lecture_csr)
   );
 
   // ---------
@@ -1077,7 +1081,8 @@ module cva6
       .hfence_gvma_o     (hfence_gvma_commit_controller),
       .protect_en_i      (protect_en_commit),
       .load_commit_o     (load_commit_timewarp),
-      .load_invalid_o    (load_invalid_timewarp)
+      .load_invalid_o    (load_invalid_timewarp),
+      .csr_commit_time_o (csr_commit_time)
   );
 
   assign commit_ack = commit_macro_ack & ~commit_drop_id_commit;
@@ -1166,7 +1171,8 @@ module cva6
       .mcountinhibit_o         (mcountinhibit_csr_perf),
       //RVFI
       .rvfi_csr_o              (rvfi_csr),
-      .csr_lecture_cycle       (csr_lecture_cycle_regfile)
+      .csr_lecture_cycle       (csr_lecture_cycle_regfile),
+      .charge_csr_i            (time_charge)
   );
 
   // ------------------------
@@ -1183,7 +1189,10 @@ module cva6
         .dcache_req_i       (dcache_req_ports_cache_ex),
         .load_commit_i      (load_commit_timewarp),
         .load_invalid_i     (load_invalid_timewarp),
-        .protect_en_o       (protect_en_commit)
+        .protect_en_o       (protect_en_commit),
+        .lecture_csr_i      (lecture_csr),
+        .charge_o           (time_charge),
+        .csr_time_i         (csr_commit_time)
     );
   // ------------------------
   // Performance Counters

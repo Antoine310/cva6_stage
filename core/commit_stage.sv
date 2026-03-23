@@ -93,7 +93,9 @@ module commit_stage
     // COMMIT LOAD 
     output logic load_commit_o,
     // COMMIT LOAD INVALID
-    output logic load_invalid_o
+    output logic load_invalid_o,
+    // COMMIT CSR
+    output logic csr_commit_time_o
 );
 
   // ila_0 i_ila_commit (
@@ -131,7 +133,9 @@ module commit_stage
 
   assign load_commit_o = (commit_instr_i[0].valid && commit_ack_o[0] && commit_instr_i[0].fu == LOAD);
   assign load_invalid_o = (commit_instr_i[0].valid && commit_instr_i[0].fu == LOAD && ( commit_drop_i[0] || commit_instr_i[0].ex.valid || !commit_ack_o[0] ));
-  
+  assign csr_commit_time_o =  (commit_instr_i[0].valid && commit_ack_o[0] && commit_instr_i[0].fu == CSR  &&  !csr_exception_i.valid );
+
+
   logic instr_0_is_amo;
   logic [CVA6Cfg.NrCommitPorts-1:0] commit_macro_ack;
   assign instr_0_is_amo = is_amo(commit_instr_i[0].op);
@@ -219,7 +223,7 @@ module commit_stage
           csr_op_o    = commit_instr_i[0].op;
           csr_wdata_o = commit_instr_i[0].result;
           if (!commit_drop_i[0]) begin
-            if (!csr_exception_i.valid && !protect_en_i) begin // Protect : Check miss + read 
+            if (!csr_exception_i.valid) begin
               commit_csr_o = 1'b1;
               wdata_o[0]   = csr_rdata_i;
             end else begin
@@ -415,16 +419,19 @@ module commit_stage
     end
   end
   int nb_cycle;
-
+  logic [CVA6Cfg.XLEN-1:0] wdata_t;
+  logic prochain ; 
   always_ff @(posedge clk_i or negedge rst_ni) begin
       if (!rst_ni) begin
           nb_cycle <= 0;
+          wdata_t <= 0;
+          prochain <= 0;
       end else begin
-
+          wdata_t <= wdata_o[0];
           if (commit_instr_i[0].valid && commit_ack_o[0] &&
               commit_instr_i[0].fu == LOAD) begin
 
-              $display("[cycle %0d] COMMIT LOAD -> x%0d | trans_id=%0d | pc=0x%0h | result=0x%0h ",
+              $display("[cycle %0d] COMMIT LOAD -> x%0d | trans_id=%0d | pc=0x%0h | result=0x%0d ",
                       nb_cycle,
                       commit_instr_i[0].rd,
                       commit_instr_i[0].trans_id,
@@ -435,11 +442,19 @@ module commit_stage
               commit_ack_o[0] &&
               commit_instr_i[0].fu == CSR) begin
 
-              $display("[cycle %0d] CSR COMMIT -> trans_id=%0d | value=0x%0h",
+              $display("[cycle %0d] CSR COMMIT -> trans_id=%0d | value=0x%0d",
                       nb_cycle,
                       commit_instr_i[0].trans_id,
-                      csr_rdata_i);
+                       wdata_o[0] );
+              prochain <= 1'b1;
           end
+          if (prochain) begin
+              $display("[cycle %0d] CSR COMMIT Next -> trans_id=%0d | value=0x%0d",
+                      nb_cycle,
+                      commit_instr_i[0].trans_id,
+                      wdata_t );
+              prochain <= 1'b0;
+          end 
           nb_cycle <= nb_cycle + 1;
       end
   end
