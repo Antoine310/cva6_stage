@@ -168,7 +168,7 @@ module csr_regfile
     output logic [31:0] mcountinhibit_o,
     // RVFI
     output rvfi_probes_csr_t rvfi_csr_o,
-    // Protect
+    // Protect - signal lecture csr commit 
     output logic csr_lecture_cycle,
     // Charge rajouter au nombre de cycle en cas de lecture 
     input logic [6:0] charge_csr_i
@@ -577,7 +577,7 @@ module csr_regfile
         riscv::CSR_MINSTRETH:
         if (CVA6Cfg.XLEN == 32) csr_rdata = instret_q[63:32];
         else read_access_exception = 1'b1;
-        riscv::CSR_CYCLE: //Protect
+        riscv::CSR_CYCLE: //Protect - cycle_timewarp est le nombre de cycle_q + charge donner par le TimeWarp
         if (CVA6Cfg.RVZicntr) begin 
           csr_rdata = cycle_timewarp[CVA6Cfg.XLEN-1:0] ;
           csr_lecture_cycle = 1'b1;
