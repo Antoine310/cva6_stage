@@ -88,14 +88,11 @@ module commit_stage
     output logic hfence_vvma_o,
     // TO_BE_COMPLETED - CONTROLLER
     output logic hfence_gvma_o,
-    // Flag Hit + read CSR 
-    input logic protect_en_i,
     // COMMIT LOAD 
     output logic load_commit_o,
     // COMMIT LOAD INVALID
-    output logic load_invalid_o,
-    // COMMIT CSR
-    output logic csr_commit_time_o
+    output logic load_invalid_o
+
 );
 
   // ila_0 i_ila_commit (
@@ -133,7 +130,6 @@ module commit_stage
 
   assign load_commit_o = (commit_instr_i[0].valid && commit_ack_o[0] && commit_instr_i[0].fu == LOAD);
   assign load_invalid_o = (commit_instr_i[0].valid && commit_instr_i[0].fu == LOAD && ( commit_drop_i[0] || commit_instr_i[0].ex.valid || !commit_ack_o[0] ));
-  assign csr_commit_time_o =  (commit_instr_i[0].valid && commit_ack_o[0] && commit_instr_i[0].fu == CSR  &&  !csr_exception_i.valid );
 
 
   logic instr_0_is_amo;

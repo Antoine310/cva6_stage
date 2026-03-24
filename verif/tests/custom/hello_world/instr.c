@@ -1,37 +1,38 @@
 volatile int array[1] = {1};
 
 int main() {
-
-    unsigned long c1, c2, i1, i2;
+    unsigned long c1, c2;
 
     asm volatile(
         "la t0, array\n"
 
-        // Warmup load
+        // Warmup
         "lw x10, 0(t0)\n"
+        
 
+        // Série de loads (pipeline plein)
+        "lw x11, 0(t0)\n"
+        "lw x12, 0(t0)\n"
+        "lw x13, 0(t0)\n"
+
+        // Lecture CSR (point critique)
         "csrr %0, cycle\n"
-        "csrr %1, instret\n"
 
-        // Load à mesurer
+        // Loads juste après → danger multi-consommation
+        "lw x10, 0(t0)\n"
+        "lw x11, 0(t0)\n"
+        "lw x12, 0(t0)\n"
+        "lw x13, 0(t0)\n"
         "lw x10, 0(t0)\n"
 
-        "csrr %2, cycle\n"
-        "csrr %3, instret\n"
-        // Instructions simples
-        "add x11, x10, x10\n"
-        "add x12, x11, x10\n"
-        "add x13, x12, x10\n"
-        "csrr %3, instret\n"
+        // Deuxième lecture CSR
+        "csrr %1, cycle\n"
 
-
-        : "=r"(c1), "=r"(i1), "=r"(c2), "=r"(i2)
+        : "=r"(c1), "=r"(c2)
         :
         : "t0", "x10", "x11", "x12", "x13", "memory"
     );
 
-    //printf("cycle delta   = %lu\n", c2 - c1);
-    printf("instret delta = %lu\n", i2);
-
+    //printf("delta = %lu\n", c2 - c1);
     return 0;
 }

@@ -2653,6 +2653,10 @@ module csr_regfile
       end else if (compteur_buffer>0) begin
         compteur_buffer <= compteur_buffer - 1; 
       end
+      if (nb_cycle== (6383 || 6382 || 6384))begin
+        $display("[cycle %0d] compteur_start=%0d augmentation_charge=%0d csr=%0d",
+         nb_cycle, compteur_start, augmentation_charge, csr_lecture_cycle);
+      end 
       charge_q <= charge_csr_i;
 
       priv_lvl_q <= priv_lvl_d;
