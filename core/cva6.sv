@@ -1180,7 +1180,6 @@ module cva6
         .rst_ni             (rst_ni),
         .csr_lecture_cycle  (csr_lecture_cycle_regfile),
         .dcache_hit_i       (dcache_hit_cache),
-        .dcache_req_i       (dcache_req_ports_cache_ex),
         .load_commit_i      (load_commit_timewarp),
         .load_invalid_i     (load_invalid_timewarp),
         .protect_en_o       (protect_en_commit)

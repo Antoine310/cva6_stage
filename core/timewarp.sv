@@ -16,8 +16,6 @@ module timewarp
     input logic csr_lecture_cycle,
     // HIT du Dcache 
     input logic dcache_hit_i,
-    // Requete du Dcache 
-    input dcache_req_o_t [2:0] dcache_req_i,
     // Load commit 
     input logic load_commit_i,
     // Load invalid du commit  
@@ -103,16 +101,6 @@ module timewarp
             csr_cycle_q   <= 1'b0;
             nb_cycle      <= 0;
         end else begin
-
-            if (dcache_req_i[1].data_rvalid) begin
-                $display("[cycle %0d] LOAD RETURN TIMEWARP-> rid=%0d | load_commit_i=%0b | hit_en(cur)=%0b | csr_cycle=%0b | protect=%0b",
-                        nb_cycle,
-                        dcache_req_i[1].data_rid,
-                        load_commit_i,
-                        hit_en,
-                        csr_lecture_cycle,
-                        protect_en_o);
-            end
 
             if (dcache_hit_c != dcache_hit_q)
                 $display("[cycle %0d] dcache_hit_cnt -> %0d", nb_cycle, dcache_hit_q);
