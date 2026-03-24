@@ -564,7 +564,7 @@ module csr_regfile
         riscv::CSR_MINSTRETH:
         if (CVA6Cfg.XLEN == 32) csr_rdata = instret_q[63:32];
         else read_access_exception = 1'b1;
-        riscv::CSR_CYCLE: //Protect
+        riscv::CSR_CYCLE: //Protect - On signal le csr de lecture de cycle.
         if (CVA6Cfg.RVZicntr) begin 
           csr_rdata = cycle_q[CVA6Cfg.XLEN-1:0];
           csr_lecture_cycle = 1'b1;
