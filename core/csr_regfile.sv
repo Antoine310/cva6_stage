@@ -277,13 +277,7 @@ module csr_regfile
   logic [63:0] cycle_q, cycle_d;
   logic [63:0] instret_q, instret_d;
   // Protect
-  logic [63:0] cycle_timewarp, inst_timewarp ;
-  logic [63:0] buffer_q,buffer_d;
-  logic [6:0]  charge_q;       
-  logic [6:0]  compteur_buffer;
-  logic compteur_start;
-  logic augmentation_charge;
-  assign augmentation_charge = (charge_csr_i > charge_q);
+  logic [63:0] cycle_timewarp ;
 
   riscv::pmpcfg_t [63:0] pmpcfg_q, pmpcfg_d, pmpcfg_next;
   logic [63:0][CVA6Cfg.PLEN-3:0] pmpaddr_q, pmpaddr_d, pmpaddr_next;
@@ -340,7 +334,6 @@ module csr_regfile
     csr_rdata = '0;
     perf_addr_o = csr_addr.address[11:0];
     csr_lecture_cycle = 1'b0;
-    inst_timewarp =  instret_q - buffer_q; 
     cycle_timewarp  <= cycle_q + charge_csr_i ;
 
     if (csr_read) begin
@@ -597,14 +590,14 @@ module csr_regfile
         end 
         riscv::CSR_INSTRET:
         if (CVA6Cfg.RVZicntr) begin
-            csr_rdata = inst_timewarp[CVA6Cfg.XLEN-1:0] ;
+            csr_rdata = instret_q[CVA6Cfg.XLEN-1:0] ;
         end 
         else begin 
           read_access_exception = 1'b1;
         end 
         riscv::CSR_INSTRETH:
         if (CVA6Cfg.RVZicntr)
-          if (CVA6Cfg.XLEN == 32) csr_rdata = inst_timewarp[63:32];
+          if (CVA6Cfg.XLEN == 32) csr_rdata = instret_q[63:32];
           else read_access_exception = 1'b1;
         else read_access_exception = 1'b1;
         //Event Selector
@@ -899,7 +892,6 @@ module csr_regfile
     automatic satp_t vsatp;
     automatic hgatp_t hgatp;
     automatic logic [63:0] instret;
-    automatic logic [63:0] buffer_inst_commit;
 
     if (CVA6Cfg.RVS) begin
       satp = satp_q;
@@ -910,7 +902,6 @@ module csr_regfile
     end
     instret         = instret_q;
     
-    buffer_inst_commit = 64'd0; 
 
     mcountinhibit_d = mcountinhibit_q;
 
@@ -919,17 +910,14 @@ module csr_regfile
     // --------------------
     cycle_d         = cycle_q;
     instret_d       = instret_q;
-    buffer_d        = buffer_q;
     if (!debug_mode_q) begin
       // increase instruction retired counter
       for (int i = 0; i < CVA6Cfg.NrCommitPorts; i++) begin
         if (commit_ack_i[i] && !ex_i.valid && (!CVA6Cfg.PerfCounterEn || (CVA6Cfg.PerfCounterEn && !mcountinhibit_q[2]))) begin
           instret++;
-          if (compteur_buffer>0) buffer_inst_commit++; 
         end
       end
       instret_d = instret;
-      buffer_d  = buffer_q + buffer_inst_commit;
       // increment the cycle count
       if (!CVA6Cfg.PerfCounterEn || (CVA6Cfg.PerfCounterEn && !mcountinhibit_q[0]))
         cycle_d = cycle_q + 1'b1;
@@ -2554,9 +2542,7 @@ module csr_regfile
     if (~rst_ni) begin
 
       //Protect
-      charge_q <= 0;
-      compteur_buffer <= 0; 
-      compteur_start  <= 0; 
+
       priv_lvl_q   <= riscv::PRIV_LVL_M;
       // floating-point registers
       fcsr_q       <= '0;
@@ -2625,7 +2611,6 @@ module csr_regfile
       // timer and counters
       cycle_q                <= 64'b0;
       instret_q              <= 64'b0;
-      buffer_q               <= 64'b0;
       // aux registers
       en_ld_st_translation_q <= 1'b0;
       // wait for interrupt
@@ -2642,22 +2627,6 @@ module csr_regfile
       end
     end else begin
 
-
-      if (csr_lecture_cycle && (compteur_start || augmentation_charge )) begin 
-        compteur_buffer <=  compteur_buffer + 10 ;
-        compteur_start <= 1'b0;
-        $display("[cycle %0d] CSR BUFFER Demarrage du compteur ! ",nb_cycle);
-      end else if (augmentation_charge) begin
-        compteur_start <= 1'b1;
-        $display("[cycle %0d] CSR BUFFER Increase le jeton ",nb_cycle);
-      end else if (compteur_buffer>0) begin
-        compteur_buffer <= compteur_buffer - 1; 
-      end
-      if (nb_cycle== (6383 || 6382 || 6384))begin
-        $display("[cycle %0d] compteur_start=%0d augmentation_charge=%0d csr=%0d",
-         nb_cycle, compteur_start, augmentation_charge, csr_lecture_cycle);
-      end 
-      charge_q <= charge_csr_i;
 
       priv_lvl_q <= priv_lvl_d;
       // floating-point registers
@@ -2724,7 +2693,6 @@ module csr_regfile
       // timer and counters
       cycle_q                <= cycle_d;
       instret_q              <= instret_d;
-      buffer_q               <= buffer_d; 
       // aux registers
       en_ld_st_translation_q <= en_ld_st_translation_d;
       // wait for interrupt
@@ -2776,13 +2744,6 @@ module csr_regfile
               nb_cycle, charge_csr_i, cycle_q, cycle_q + charge_csr_i);
         end
 
-      if (augmentation_charge) begin 
-          $display("[cycle %0d] CSR BUFFER augmentation_charge",nb_cycle);
-      end 
-      if (buffer_q != buffer_d) begin
-        $display("[cycle %0d] CSR BUFFER buffer_d=%0d buffer_q=%0d inst_timewarp=%0d instret_q=%0d ",
-                nb_cycle, buffer_d, buffer_q,inst_timewarp,instret_q);
-      end 
       nb_cycle <= nb_cycle + 1; 
     end 
   end 

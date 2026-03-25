@@ -20,7 +20,7 @@ module timewarp
 #(
     parameter config_pkg::cva6_cfg_t CVA6Cfg = config_pkg::cva6_cfg_empty,
     parameter type dcache_req_o_t = logic,
-    parameter int HIT_TIME = 10,    // Delais Hit présent 
+    parameter int HIT_TIME = 10,    // Delais Hit présent, HIT_TIME > 0 
     parameter int CHARGE_TIME = 10 // temps ajouter au compteur de la charge 
 ) (
     // Subsystem Clock - SUBSYSTEM
