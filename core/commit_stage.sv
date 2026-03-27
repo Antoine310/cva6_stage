@@ -219,7 +219,7 @@ module commit_stage
           csr_op_o    = commit_instr_i[0].op;
           csr_wdata_o = commit_instr_i[0].result;
           if (!commit_drop_i[0]) begin
-            if (!csr_exception_i.valid && !protect_en_i) begin // Protect : Check hit + read 
+            if (!csr_exception_i.valid ) begin // Protect : Check hit + read 
               commit_csr_o = 1'b1;
               wdata_o[0]   = csr_rdata_i;
             end else begin
@@ -414,34 +414,6 @@ module commit_stage
       exception_o.valid = 1'b0;
     end
   end
-  int nb_cycle;
 
-  always_ff @(posedge clk_i or negedge rst_ni) begin
-      if (!rst_ni) begin
-          nb_cycle <= 0;
-      end else begin
-
-          if (commit_instr_i[0].valid && commit_ack_o[0] &&
-              commit_instr_i[0].fu == LOAD) begin
-
-              $display("[cycle %0d] COMMIT LOAD -> x%0d | trans_id=%0d | pc=0x%0h | result=0x%0h ",
-                      nb_cycle,
-                      commit_instr_i[0].rd,
-                      commit_instr_i[0].trans_id,
-                      commit_instr_i[0].pc,
-                      commit_instr_i[0].result);
-          end
-          if (commit_instr_i[0].valid &&
-              commit_ack_o[0] &&
-              commit_instr_i[0].fu == CSR) begin
-
-              $display("[cycle %0d] CSR COMMIT -> trans_id=%0d | value=0x%0h",
-                      nb_cycle,
-                      commit_instr_i[0].trans_id,
-                      csr_rdata_i);
-          end
-          nb_cycle <= nb_cycle + 1;
-      end
-  end
 
 endmodule

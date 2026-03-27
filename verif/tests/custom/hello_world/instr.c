@@ -7,16 +7,11 @@ int main() {
     asm volatile(
         "la t0, array\n"
 
-        // Warmup load
-        "lw x10, 0(t0)\n"
-
-        "lw x11, 0(t0)\n"
-        "lw x12, 0(t0)\n"
-        "csrr %2, cycle\n"
+        // Warmup load        
         "csrr %3, cycle\n"
         "lw x10, 0(t0)\n"
         "lw x11, 0(t0)\n"
-        "csrr %1, cycle\n"
+        "lw x12, 0(t0)\n"
         "csrr %2, cycle\n"
 
 

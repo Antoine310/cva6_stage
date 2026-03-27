@@ -9,6 +9,7 @@ int main() {
 
     asm volatile(
         "la t0, array\n"
+        
         "lw x10, 0(t0)\n"
         "lw x11, 0(t0)\n"
         "csrr x12, cycle\n"

@@ -2525,6 +2525,8 @@ module csr_regfile
   assign single_step_o = CVA6Cfg.DebugEn ? dcsr_q.step : 1'b0;
   assign mcountinhibit_o = {{29 - MHPMCounterNum{1'b0}}, mcountinhibit_q};
 
+  int nb_cycle;
+
   // sequential process
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (~rst_ni) begin
@@ -2533,6 +2535,8 @@ module csr_regfile
       fcsr_q       <= '0;
       // debug signals
       debug_mode_q <= 1'b0;
+
+      nb_cycle <= '0;
       if (CVA6Cfg.DebugEn) begin
         dcsr_q           <= '0;
         dcsr_q.prv       <= riscv::PRIV_LVL_M;
@@ -2611,6 +2615,10 @@ module csr_regfile
         end
       end
     end else begin
+      nb_cycle <= nb_cycle + 1;
+      if(csr_lecture_cycle) begin 
+          $display("[cycle %0d] Lecture",nb_cycle);
+      end 
       priv_lvl_q <= priv_lvl_d;
       // floating-point registers
       fcsr_q     <= fcsr_d;

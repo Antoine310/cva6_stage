@@ -20,6 +20,7 @@ module timewarp
     parameter type dcache_req_o_t = logic,
     parameter int HIT_TIME = 10,    // Delais Hit présent 
     parameter int STALL_COMMIT= 10 // temps Stall + 1 
+    parameter int PREDIC= 10 // Temps entre deux lecture de cycle pour augmenter la predic
 ) (
     // Subsystem Clock - SUBSYSTEM
     input logic clk_i,
@@ -38,18 +39,19 @@ module timewarp
 );
     logic [$clog2(HIT_TIME+1)-1:0] compteur_hit;
     logic [$clog2(STALL_COMMIT+1)-1:0] compteur_stall;
+    logic [$clog2(PREDIC+1)-1:0] compteur_predicte;
 
     logic hit_en ; // Signal d'un Load Hit en cours, Attente si une lecture va s'effectuer dessus 
     logic [2:0] dcache_hit_q; // Compteur pour prendre en compte les load Hit pas encore arriver au commit
-
+    logic [2:0] predicteur;
+    logic csr_lecture_en;
 
     always_comb begin : activation_stall
 
         protect_en_o = 1'b0; 
         // Si on eu un load hit et une lecture, on commence un stall du pipeline.
-        if (hit_en && csr_lecture_cycle) begin 
+        if (hit_en && csr_lecture_cycle && ((csr_lecture_en && predicteur > 0) || predicteur>1 ) ) begin 
             protect_en_o = 1'b1; 
-            $display("TIMEWARP PROTECTION ENABLED");
         // On continue le temps du compteur.
         end else if (compteur_stall !=  0) begin
             protect_en_o = 1'b1;
@@ -62,6 +64,7 @@ module timewarp
             compteur_hit <= '0;
             compteur_stall <= '0;
             dcache_hit_q <= '0;
+            predicteur <= '0;
         end else begin 
             // Compteur des load hit en vol 
             dcache_hit_q <= dcache_hit_q + dcache_hit_i - ((dcache_hit_q>0) && load_commit_i) - ((dcache_hit_q>0) && load_invalid_i);
@@ -84,49 +87,25 @@ module timewarp
                 compteur_stall <= compteur_stall - 1 ; 
             end 
 
+            if (csr_lecture_cycle && !csr_lecture_en) begin 
+                csr_lecture_en  <= 1'b1;
+                compteur_predicte <= PREDIC[$bits(compteur_predicte)-1:0];
+            end else if (csr_lecture_cycle && csr_lecture_en && hit_en) begin 
+                if (predicteur < 3)
+                    predicteur <= predicteur + 1; 
+                csr_lecture_en <= 1'b0; 
+                compteur_predicte <= '0;
+            end else if (compteur_predicte != 0) begin
+                compteur_predicte <= compteur_predicte - 1 ; 
+                if (compteur_predicte == 1) begin
+                    csr_lecture_en <= 1'b0; 
+                    if (predicteur > 0)
+                        predicteur <= predicteur - 1; 
+                end
+            end 
         end 
     end
 
-    logic protect_en_q;
-    logic hit_en_q;
-    logic csr_cycle_q;
-    logic [2:0] dcache_hit_c;    
-    int nb_cycle;
-    logic load_commit_q;
-
-    always_ff @(posedge clk_i or negedge rst_ni) begin
-        if (!rst_ni) begin
-            protect_en_q  <= 1'b0;
-            hit_en_q      <= 1'b0;
-            dcache_hit_c  <= '0;
-            csr_cycle_q   <= 1'b0;
-            nb_cycle      <= 0;
-        end else begin
-
-            if (dcache_hit_c != dcache_hit_q)
-                $display("[cycle %0d] dcache_hit_cnt -> %0d", nb_cycle, dcache_hit_q);
-        
-            if (protect_en_o != protect_en_q)
-                $display("[cycle %0d] protect_en_o -> %0b \n", nb_cycle, protect_en_o);
-
-            if (hit_en != hit_en_q)
-                $display("[cycle %0d] hit_en -> %0b \n ", nb_cycle, hit_en);
-
-            if (csr_lecture_cycle != csr_cycle_q)
-                $display("[cycle %0d] csr_lecture_cycle -> %0b \n" , nb_cycle, csr_lecture_cycle);
-
-            if (load_commit_i != load_commit_q)
-                $display("[cycle %0d] load_commit_i -> %0b \n", nb_cycle, load_commit_i);
-
-    
-            protect_en_q <= protect_en_o;
-            hit_en_q <= hit_en;
-            csr_cycle_q <= csr_lecture_cycle;
-            dcache_hit_c <= dcache_hit_q;
-            load_commit_q <= load_commit_i;
-            nb_cycle <= nb_cycle + 1;
-
-        end
-    end
+   
 
 endmodule 

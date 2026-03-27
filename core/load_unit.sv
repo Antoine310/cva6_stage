@@ -556,13 +556,19 @@ always_ff @(posedge clk_i or negedge rst_ni) begin
 
         // Détection d'un retour de load
         if (req_port_i.data_rvalid) begin
-            $display("[cycle %0d] LOAD RETURN -> data_rid: %0d | trans_id: %0d | data: 0x%0h",
+            $display("LOAD RETURN [cycle %0d] -> data_rid %0d | trans_id %0d | data 0x%0h",
                      nb_cycle,
                      req_port_i.data_rid,
                      ldbuf_q[req_port_i.data_rid].trans_id,
                      req_port_i.data_rdata);
         end
-
+        if (ldbuf_w) begin
+            $display("LOAD REQ [cycle %0d] -> data_id %0d | trans_id %0d | addr 0x%0h",
+                    nb_cycle,
+                    ldbuf_windex,
+                    lsu_ctrl_i.trans_id,
+                    lsu_ctrl_i.vaddr);
+        end
 
         // sauvegarde état précédent
         data_rid_q <= req_port_i.data_rid;
