@@ -20,7 +20,7 @@ module timewarp
     parameter type dcache_req_o_t = logic,
     parameter int HIT_TIME = 10,    // Delais Hit présent 
     parameter int STALL_COMMIT= 10 // temps Stall + 1 
-    parameter int PREDIC= 10 // Temps entre deux lecture de cycle pour augmenter la predic
+    parameter int PREDIC= 30 // Temps entre deux lecture de cycle pour augmenter la predic
 ) (
     // Subsystem Clock - SUBSYSTEM
     input logic clk_i,
@@ -45,12 +45,15 @@ module timewarp
     logic [2:0] dcache_hit_q; // Compteur pour prendre en compte les load Hit pas encore arriver au commit
     logic [2:0] predicteur;
     logic csr_lecture_en;
+    logic predic_positive;
+
+    assign predic_positive = (csr_lecture_en && predicteur > 0) || (predicteur > 1);
 
     always_comb begin : activation_stall
 
         protect_en_o = 1'b0; 
         // Si on eu un load hit et une lecture, on commence un stall du pipeline.
-        if (hit_en && csr_lecture_cycle && ((csr_lecture_en && predicteur > 0) || predicteur>1 ) ) begin 
+        if (hit_en && csr_lecture_cycle && predic_positive ) begin 
             protect_en_o = 1'b1; 
         // On continue le temps du compteur.
         end else if (compteur_stall !=  0) begin
@@ -64,7 +67,8 @@ module timewarp
             compteur_hit <= '0;
             compteur_stall <= '0;
             dcache_hit_q <= '0;
-            predicteur <= '0;
+            predicteur <= 2'b10;
+            csr_lecture_en <= 1'b0;
         end else begin 
             // Compteur des load hit en vol 
             dcache_hit_q <= dcache_hit_q + dcache_hit_i - ((dcache_hit_q>0) && load_commit_i) - ((dcache_hit_q>0) && load_invalid_i);
