@@ -19,7 +19,7 @@ module timewarp
     parameter config_pkg::cva6_cfg_t CVA6Cfg = config_pkg::cva6_cfg_empty,
     parameter type dcache_req_o_t = logic,
     parameter int HIT_TIME = 10,    // Delais Hit présent 
-    parameter int STALL_COMMIT= 10 // temps Stall + 1 
+    parameter int STALL_COMMIT= 10, // temps Stall + 1 
     parameter int PREDIC= 30 // Temps entre deux lecture de cycle pour augmenter la predic
 ) (
     // Subsystem Clock - SUBSYSTEM
@@ -55,6 +55,8 @@ module timewarp
         // Si on eu un load hit et une lecture, on commence un stall du pipeline.
         if (hit_en && csr_lecture_cycle && predic_positive ) begin 
             protect_en_o = 1'b1; 
+            $display("[cycle %0d] Time Protection \n", nb_cycle);
+
         // On continue le temps du compteur.
         end else if (compteur_stall !=  0) begin
             protect_en_o = 1'b1;
@@ -67,7 +69,7 @@ module timewarp
             compteur_hit <= '0;
             compteur_stall <= '0;
             dcache_hit_q <= '0;
-            predicteur <= 2'b10;
+            predicteur <= 2'b00;
             csr_lecture_en <= 1'b0;
         end else begin 
             // Compteur des load hit en vol 
@@ -84,7 +86,7 @@ module timewarp
                 end
             end 
             // Si on a une Csr lecture commit et un hit_en, on consomme le Hit et on demarre le stall du pipeline pendant x cycle.
-            if (hit_en && csr_lecture_cycle) begin 
+            if (hit_en && csr_lectrue_cycle  && predic_positive ) begin 
                 hit_en <= 1'b0; 
                 compteur_stall <= STALL_COMMIT[$bits(compteur_stall)-1:0];
             end else if (compteur_stall !=  0) begin
@@ -110,6 +112,61 @@ module timewarp
         end 
     end
 
-   
+    logic protect_en_q;
+    logic hit_en_q;
+    logic csr_cycle_q;
+    logic [2:0] dcache_hit_c;    
+    int nb_cycle;
+    logic load_commit_q;
+    logic csr_lecture_en_q;
+    logic [2:0] predicteur_q;
+    logic predic_positive_q;
+    always_ff @(posedge clk_i or negedge rst_ni) begin
+        if (!rst_ni) begin
+            protect_en_q  <= 1'b0;
+            hit_en_q      <= 1'b0;
+            dcache_hit_c  <= '0;
+            csr_cycle_q   <= 1'b0;
+            nb_cycle      <= 0;
+            csr_lecture_en_q <= 1'b0;
+            predicteur_q <= '0;
+            predic_positive_q <= '0;
+        end else begin
+
+            if (predicteur_q != predicteur)
+                $display("[cycle %0d] predicteur -> %0d", nb_cycle, predicteur);
+            if (predic_positive_q != predic_positive)
+                $display("[cycle %0d] predic_positive -> %0d", nb_cycle, predic_positive);
+
+            if (csr_lecture_en_q != csr_lecture_en)
+                $display("[cycle %0d] csr_lecture_en -> %0d", nb_cycle, csr_lecture_en);
+
+       
+            if (dcache_hit_c != dcache_hit_q)
+                $display("[cycle %0d] dcache_hit_cnt -> %0d", nb_cycle, dcache_hit_q);
+        
+            if (protect_en_o != protect_en_q)
+                $display("[cycle %0d] protect_en_o -> %0b \n", nb_cycle, protect_en_o);
+
+            if (hit_en != hit_en_q)
+                $display("[cycle %0d] hit_en -> %0b \n ", nb_cycle, hit_en);
+
+            if (csr_lecture_cycle != csr_cycle_q)
+                $display("[cycle %0d] csr_lecture_cycle -> %0b \n" , nb_cycle, csr_lecture_cycle ,  );
+
+            if (load_commit_i != load_commit_q)
+                $display("[cycle %0d] load_commit_i -> %0b \n", nb_cycle, load_commit_i);
+
+            predicteur_q <= predicteur;
+            csr_lecture_en_q <= csr_lecture_en; 
+            protect_en_q <= protect_en_o;
+            hit_en_q <= hit_en;
+            csr_cycle_q <= csr_lecture_cycle;
+            dcache_hit_c <= dcache_hit_q;
+            load_commit_q <= load_commit_i;
+            nb_cycle <= nb_cycle + 1;
+
+        end
+    end
 
 endmodule 
