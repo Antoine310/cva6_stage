@@ -2733,20 +2733,7 @@ module csr_regfile
     end
   end
 
-  int nb_cycle;
-  // sequential process
-  always_ff @(posedge clk_i or negedge rst_ni) begin
-    if (~rst_ni) begin
-      nb_cycle <= 0;
-    end else begin
-      if (csr_lecture_cycle) begin
-      $display("[cycle %0d] CSR sees charge_csr_i=%0d cycle_q=%0d cycle_timewarp=%0d",
-              nb_cycle, charge_csr_i, cycle_q, cycle_q + charge_csr_i);
-        end
 
-      nb_cycle <= nb_cycle + 1; 
-    end 
-  end 
   //-------------
   // Assertions
   //-------------

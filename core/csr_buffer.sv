@@ -95,21 +95,6 @@ module csr_buffer
       csr_reg_q <= csr_reg_n;
     end
   end
-  int nb_cycle;
 
-  always_ff @(posedge clk_i or negedge rst_ni) begin
-      if (!rst_ni) begin
-          nb_cycle <= 0;
-      end else begin
 
-          if (csr_lecture_o) begin
-            $display("[cycle %0d] CSR READ DETECTED -> trans_id=%0d",
-                    nb_cycle,
-                    fu_data_i.trans_id);
-          end
-          
-          nb_cycle <= nb_cycle + 1;
-
-      end
-  end
 endmodule

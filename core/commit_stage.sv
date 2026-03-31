@@ -414,45 +414,6 @@ module commit_stage
       exception_o.valid = 1'b0;
     end
   end
-  int nb_cycle;
-  logic [CVA6Cfg.XLEN-1:0] wdata_t;
-  logic prochain ; 
-  always_ff @(posedge clk_i or negedge rst_ni) begin
-      if (!rst_ni) begin
-          nb_cycle <= 0;
-          wdata_t <= 0;
-          prochain <= 0;
-      end else begin
-          wdata_t <= wdata_o[0];
-          if (commit_instr_i[0].valid && commit_ack_o[0] &&
-              commit_instr_i[0].fu == LOAD) begin
 
-              $display("[cycle %0d] COMMIT LOAD -> x%0d | trans_id=%0d | pc=0x%0h | result=0x%0d ",
-                      nb_cycle,
-                      commit_instr_i[0].rd,
-                      commit_instr_i[0].trans_id,
-                      commit_instr_i[0].pc,
-                      commit_instr_i[0].result);
-          end
-          if (commit_instr_i[0].valid &&
-              commit_ack_o[0] &&
-              commit_instr_i[0].fu == CSR) begin
-
-              $display("[cycle %0d] CSR COMMIT -> trans_id=%0d | value=0x%0d",
-                      nb_cycle,
-                      commit_instr_i[0].trans_id,
-                       wdata_o[0] );
-              prochain <= 1'b1;
-          end
-          if (prochain) begin
-              $display("[cycle %0d] CSR COMMIT Next -> trans_id=%0d | value=0x%0d",
-                      nb_cycle,
-                      commit_instr_i[0].trans_id,
-                      wdata_t );
-              prochain <= 1'b0;
-          end 
-          nb_cycle <= nb_cycle + 1;
-      end
-  end
 
 endmodule
