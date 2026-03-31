@@ -127,7 +127,17 @@ module wt_dcache
 
   //Protect 
   logic     [                      NumPorts-1:0]                                  hit_port;
-  assign hit_cache_o = hit_port[1];
+
+  logic hit_cache_q;
+
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni)
+      hit_cache_q <= 1'b0;
+    else
+      hit_cache_q <= hit_port[1];
+  end
+
+  assign hit_cache_o = hit_cache_q;
 
   ///////////////////////////////////////////////////////
   // miss handling unit
@@ -255,6 +265,7 @@ module wt_dcache
       assign rd_off[k] = {{CVA6Cfg.DCACHE_OFFSET_WIDTH} {1'b0}};
       assign rd_req[k] = 1'b0;
       assign rd_tag_only[k] = 1'b0;
+      assign hit_port[k] = 1'b0;
     end
   end
 
