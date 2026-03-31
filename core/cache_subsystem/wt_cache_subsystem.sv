@@ -173,7 +173,7 @@ module wt_cache_subsystem
       .mem_data_req_o  (dcache_adapter_data_req),
       .mem_data_ack_i  (adapter_dcache_data_ack),
       .mem_data_o      (dcache_adapter),
-      .hit_cache_o
+      .hit_cache_o     (hit_cache_o)
   );
 
 
