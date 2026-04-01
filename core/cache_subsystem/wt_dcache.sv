@@ -128,16 +128,7 @@ module wt_dcache
   //Protect 
   logic     [                      NumPorts-1:0]                                  hit_port;
 
-  logic hit_cache_q;
-
-  always_ff @(posedge clk_i or negedge rst_ni) begin
-    if (!rst_ni)
-      hit_cache_q <= 1'b0;
-    else
-      hit_cache_q <= hit_port[1];
-  end
-
-  assign hit_cache_o = hit_cache_q;
+  assign hit_cache_o = |rd_hit_oh;
 
   ///////////////////////////////////////////////////////
   // miss handling unit
@@ -245,8 +236,7 @@ module wt_dcache
           .rd_data_i      (rd_data),
           .rd_user_i      (rd_user),
           .rd_vld_bits_i  (rd_vld_bits),
-          .rd_hit_oh_i    (rd_hit_oh),
-          .hit_o          (hit_port[k])             
+          .rd_hit_oh_i    (rd_hit_oh)
       );
     end else begin
       assign rd_prio[k] = 1'b0;
@@ -265,7 +255,6 @@ module wt_dcache
       assign rd_off[k] = {{CVA6Cfg.DCACHE_OFFSET_WIDTH} {1'b0}};
       assign rd_req[k] = 1'b0;
       assign rd_tag_only[k] = 1'b0;
-      assign hit_port[k] = 1'b0;
     end
   end
 
