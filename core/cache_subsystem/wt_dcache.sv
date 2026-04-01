@@ -128,7 +128,7 @@ module wt_dcache
   //Protect 
   logic     [                      NumPorts-1:0]                                  hit_port;
 
-  assign hit_cache_o = |rd_hit_oh;
+  assign hit_cache_o =  |rd_hit_oh && req_ports_o[1].data_rvalid; 
 
   ///////////////////////////////////////////////////////
   // miss handling unit
