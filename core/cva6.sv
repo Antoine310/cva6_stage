@@ -632,7 +632,23 @@ module cva6
   logic [63:0] inval_addr;
   logic inval_valid;
   logic inval_ready;
+  //Protect
+  logic csr_lecture_cycle_regfile;
+  logic protect_en_commit;
+  logic load_commit_timewarp;
+  logic load_invalid_timewarp;
+  logic dcache_hit_cache;
 
+  logic debug_toggle;
+
+  always_ff @(posedge clk_i)
+    debug_toggle <= ~debug_toggle;
+
+  assign protect_en_commit        = debug_toggle;
+  assign load_commit_timewarp     = debug_toggle;
+  assign load_invalid_timewarp    = debug_toggle;
+  assign csr_lecture_cycle_regfile = debug_toggle;
+  assign dcache_hit_cache         = debug_toggle;
   // --------------
   // Frontend
   // --------------
@@ -1157,6 +1173,22 @@ module cva6
       //RVFI
       .rvfi_csr_o              (rvfi_csr)
   );
+
+  // ------------------------
+  // Protec module 
+  // ------------------------
+    timewarp #(
+        .CVA6Cfg(CVA6Cfg),
+        .dcache_req_o_t(dcache_req_o_t)
+    ) timewarp_i (
+        .clk_i              (clk_i),
+        .rst_ni             (rst_ni),
+        .csr_lecture_cycle_i(csr_lecture_cycle_regfile),
+        .dcache_hit_i       (dcache_hit_cache),
+        .load_commit_i      (load_commit_timewarp),
+        .load_invalid_i     (load_invalid_timewarp),
+        .protect_en_o       (protect_en_commit)
+    );
 
   // ------------------------
   // Performance Counters
