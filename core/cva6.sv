@@ -641,10 +641,12 @@ module cva6
 
   logic debug_toggle;
 
-  always_ff @(posedge clk_i)
-    debug_toggle <= ~debug_toggle;
-
-  assign protect_en_commit        = debug_toggle;
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni)
+      debug_toggle <= 1'b0;
+    else
+      debug_toggle <= ~debug_toggle;
+  end
   assign load_commit_timewarp     = debug_toggle;
   assign load_invalid_timewarp    = debug_toggle;
   assign csr_lecture_cycle_regfile = debug_toggle;
