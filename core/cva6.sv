@@ -1166,15 +1166,14 @@ module cva6
       .mcountinhibit_o         (mcountinhibit_csr_perf),
       //RVFI
       .rvfi_csr_o              (rvfi_csr),
-      .csr_lecture_cycle       (csr_lecture_cycle_regfile)
+      .csr_lecture_cycle_o     (csr_lecture_cycle_regfile)
   );
 
   // ------------------------
   // Protec module 
   // ------------------------
     timewarp #(
-        .CVA6Cfg(CVA6Cfg),
-        .dcache_req_o_t(dcache_req_o_t)
+        .CVA6Cfg(CVA6Cfg)
     ) timewarp_i (
         .clk_i              (clk_i),
         .rst_ni             (rst_ni),

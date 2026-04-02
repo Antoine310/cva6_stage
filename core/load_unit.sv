@@ -540,38 +540,6 @@ module load_unit
     endcase
   end
 
-int nb_cycle;
-
-logic [REQ_ID_BITS-1:0] data_rid_q;
-logic [CVA6Cfg.TRANS_ID_BITS-1:0] trans_id_q;
-logic rvalid_q;
-
-always_ff @(posedge clk_i or negedge rst_ni) begin
-    if (!rst_ni) begin
-        nb_cycle   <= 0;
-        data_rid_q <= '0;
-        trans_id_q <= '0;
-        rvalid_q   <= 1'b0;
-    end else begin
-
-        // Détection d'un retour de load
-        if (req_port_i.data_rvalid) begin
-            $display("[cycle %0d] LOAD RETURN -> data_rid: %0d | trans_id: %0d | data: 0x%0h",
-                     nb_cycle,
-                     req_port_i.data_rid,
-                     ldbuf_q[req_port_i.data_rid].trans_id,
-                     req_port_i.data_rdata);
-        end
-
-
-        // sauvegarde état précédent
-        data_rid_q <= req_port_i.data_rid;
-        trans_id_q <= ldbuf_q[req_port_i.data_rid].trans_id;
-        rvalid_q   <= req_port_i.data_rvalid;
-
-        nb_cycle <= nb_cycle + 1;
-    end
-end
 
   // end result mux fast
 
