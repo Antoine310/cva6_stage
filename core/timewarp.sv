@@ -26,7 +26,7 @@ module timewarp
     // Asynchronous reset active low - SUBSYSTEM
     input logic rst_ni,
     // Lecture du cycle en cours dans csr_regfile 
-    input logic csr_lecture_cycle,
+    input logic csr_lecture_cycle_i,
     // HIT du Dcache avant commit 
     input logic dcache_hit_i,
     // Load commit 
@@ -47,7 +47,7 @@ module timewarp
 
         protect_en_o = 1'b0; 
         // Si on eu un load hit et une lecture, on commence un stall du pipeline.
-        if (hit_en && csr_lecture_cycle) begin 
+        if (hit_en && csr_lecture_cycle_i) begin 
             protect_en_o = 1'b1; 
             $display("TIMEWARP PROTECTION ENABLED");
         // On continue le temps du compteur.
@@ -77,7 +77,7 @@ module timewarp
                 end
             end 
             // Si on a une Csr lecture commit et un hit_en, on consomme le Hit et on demarre le stall du pipeline pendant x cycle.
-            if (hit_en && csr_lecture_cycle) begin 
+            if (hit_en && csr_lecture_cycle_i) begin 
                 hit_en <= 1'b0; 
                 compteur_stall <= STALL_COMMIT[$bits(compteur_stall)-1:0];
             end else if (compteur_stall !=  0) begin
@@ -112,8 +112,8 @@ module timewarp
             if (hit_en != hit_en_q)
                 $display("[cycle %0d] hit_en -> %0b \n ", nb_cycle, hit_en);
 
-            if (csr_lecture_cycle != csr_cycle_q)
-                $display("[cycle %0d] csr_lecture_cycle -> %0b \n" , nb_cycle, csr_lecture_cycle);
+            if (csr_lecture_cycle_i != csr_cycle_q)
+                $display("[cycle %0d] csr_lecture_cycle -> %0b \n" , nb_cycle, csr_lecture_cycle_i);
 
             if (load_commit_i != load_commit_q)
                 $display("[cycle %0d] load_commit_i -> %0b \n", nb_cycle, load_commit_i);
@@ -121,7 +121,7 @@ module timewarp
     
             protect_en_q <= protect_en_o;
             hit_en_q <= hit_en;
-            csr_cycle_q <= csr_lecture_cycle;
+            csr_cycle_q <= csr_lecture_cycle_i;
             dcache_hit_c <= dcache_hit_q;
             load_commit_q <= load_commit_i;
             nb_cycle <= nb_cycle + 1;

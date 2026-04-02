@@ -1178,7 +1178,7 @@ module cva6
     ) timewarp_i (
         .clk_i              (clk_i),
         .rst_ni             (rst_ni),
-        .csr_lecture_cycle  (csr_lecture_cycle_regfile),
+        .csr_lecture_cycle_i(csr_lecture_cycle_regfile),
         .dcache_hit_i       (dcache_hit_cache),
         .load_commit_i      (load_commit_timewarp),
         .load_invalid_i     (load_invalid_timewarp),
