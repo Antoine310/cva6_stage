@@ -75,6 +75,8 @@ module ex_stage
     input logic [CVA6Cfg.NrIssuePorts-1:0] csr_valid_i,
     // CSR address to write - COMMIT_STAGE
     output logic [11:0] csr_addr_o,
+    // CSR lecture
+    output logic csr_lecture_o,
     // CSR commit - COMMIT_STAGE
     input logic csr_commit_i,
     // MULT instruction is valid - ISSUE_STAGE
@@ -343,7 +345,8 @@ module ex_stage
       .csr_ready_o (csr_ready),
       .csr_result_o(csr_result),
       .csr_commit_i,
-      .csr_addr_o
+      .csr_addr_o,
+      .csr_lecture_o 
   );
 
   assign flu_valid_o = |one_cycle_select | mult_valid;

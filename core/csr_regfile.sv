@@ -167,9 +167,8 @@ module csr_regfile
     // TO_BE_COMPLETED - PERF_COUNTERS
     output logic [31:0] mcountinhibit_o,
     // RVFI
-    output rvfi_probes_csr_t rvfi_csr_o,
+    output rvfi_probes_csr_t rvfi_csr_o
     // Protect
-    output logic csr_lecture_cycle_o
 );
 
   localparam logic [63:0] SMODE_STATUS_READ_MASK = ariane_pkg::smode_status_read_mask(CVA6Cfg);
@@ -328,7 +327,6 @@ module csr_regfile
     virtual_read_access_exception = 1'b0;
     csr_rdata = '0;
     perf_addr_o = csr_addr.address[11:0];
-    csr_lecture_cycle_o = 1'b0;
 
     if (csr_read) begin
       unique case (conv_csr_addr.address)
@@ -567,7 +565,6 @@ module csr_regfile
         riscv::CSR_CYCLE: //Protect - On signal le csr de lecture de cycle.
         if (CVA6Cfg.RVZicntr) begin 
           csr_rdata = cycle_q[CVA6Cfg.XLEN-1:0];
-          csr_lecture_cycle_o = 1'b1;
         end else begin
           read_access_exception = 1'b1;
         end 
@@ -575,7 +572,6 @@ module csr_regfile
         if (CVA6Cfg.RVZicntr) begin
           if (CVA6Cfg.XLEN == 32) begin 
             csr_rdata = cycle_q[63:32];
-            csr_lecture_cycle_o = 1'b1;
           end else begin 
             read_access_exception = 1'b1;
           end 

@@ -93,7 +93,11 @@ module commit_stage
     // COMMIT LOAD 
     output logic load_commit_o,
     // COMMIT LOAD INVALID
-    output logic load_invalid_o
+    output logic load_invalid_o,
+    // COMMIT csr 
+    output logic csr_commit_o,
+    // COMMIT csr INVALID
+    output logic csr_invalid_o
 );
 
   // ila_0 i_ila_commit (
@@ -131,6 +135,9 @@ module commit_stage
 
   assign load_commit_o = (commit_instr_i[0].valid && commit_ack_o[0] && commit_instr_i[0].fu == LOAD);
   assign load_invalid_o = (commit_instr_i[0].valid && commit_instr_i[0].fu == LOAD && ( commit_drop_i[0] || commit_instr_i[0].ex.valid || !commit_ack_o[0] ));
+  
+assign csr_commit_o = (commit_instr_i[0].valid && commit_instr_i[0].fu == CSR && !commit_instr_i[0].ex.valid && !commit_drop_i[0]);
+assign csr_invalid_o = (commit_instr_i[0].valid && commit_instr_i[0].fu == CSR && ( commit_drop_i[0] || commit_instr_i[0].ex.valid || csr_exception_i.valid  ));
   
   logic instr_0_is_amo;
   logic [CVA6Cfg.NrCommitPorts-1:0] commit_macro_ack;

@@ -544,6 +544,7 @@ module cva6
   logic [CVA6Cfg.PPNW-1:0] hgatp_ppn_csr_ex;
   logic [CVA6Cfg.VMID_WIDTH-1:0] vmid_csr_ex;
   logic [11:0] csr_addr_ex_csr;
+  logic csr_lecture;
   fu_op csr_op_commit_csr;
   logic [CVA6Cfg.XLEN-1:0] csr_wdata_commit_csr;
   logic [CVA6Cfg.XLEN-1:0] csr_rdata_csr_commit;
@@ -564,11 +565,11 @@ module cva6
   logic [CVA6Cfg.NrPMPEntries-1:0][CVA6Cfg.PLEN-3:0] pmpaddr;
   logic [31:0] mcountinhibit_csr_perf;
   //Protect 
-  logic csr_lecture_cycle_regfile;
   logic protect_en_commit;
   logic load_commit_timewarp;
   logic load_invalid_timewarp;
-
+  logic csr_commit_timewarp;
+  logic csr_invalid_timewarp;
   // ----------------------------
   // Performance Counters <-> *
   // ----------------------------
@@ -933,6 +934,9 @@ module cva6
       // CSR
       .csr_valid_i(csr_valid_id_ex),
       .csr_addr_o(csr_addr_ex_csr),
+      
+      .csr_lecture_o(csr_lecture),
+
       .csr_commit_i(csr_commit_commit_ex),  // from commit
       .csr_hs_ld_st_inst_o(csr_hs_ld_st_inst_ex),  // signals a Hypervisor Load/Store Instruction
       // MULT
@@ -1077,7 +1081,9 @@ module cva6
       .hfence_gvma_o     (hfence_gvma_commit_controller),
       .protect_en_i      (protect_en_commit),
       .load_commit_o     (load_commit_timewarp),
-      .load_invalid_o    (load_invalid_timewarp)
+      .load_invalid_o    (load_invalid_timewarp),
+      .csr_commit_o      (csr_commit_timewarp),
+      .csr_invalid_o     (csr_invalid_timewarp)
   );
 
   assign commit_ack = commit_macro_ack & ~commit_drop_id_commit;
@@ -1165,8 +1171,7 @@ module cva6
       .pmpaddr_o               (pmpaddr),
       .mcountinhibit_o         (mcountinhibit_csr_perf),
       //RVFI
-      .rvfi_csr_o              (rvfi_csr),
-      .csr_lecture_cycle_o     (csr_lecture_cycle_regfile)
+      .rvfi_csr_o              (rvfi_csr)
   );
 
   // ------------------------
@@ -1177,10 +1182,12 @@ module cva6
     ) timewarp_i (
         .clk_i              (clk_i),
         .rst_ni             (rst_ni),
-        .csr_lecture_cycle  (csr_lecture_cycle_regfile),
+        .csr_lecture_i      (csr_lecture),
         .dcache_hit_i       (dcache_hit_cache),
         .load_commit_i      (load_commit_timewarp),
         .load_invalid_i     (load_invalid_timewarp),
+        .csr_commit_i       (csr_commit_timewarp),
+        .csr_invalid_i      (csr_invalid_timewarp),
         .protect_en_o       (protect_en_commit)
     );
   // ------------------------

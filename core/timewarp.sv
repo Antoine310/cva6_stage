@@ -25,13 +25,17 @@ module timewarp
     // Asynchronous reset active low - SUBSYSTEM
     input logic rst_ni,
     // Lecture du cycle en cours dans csr_regfile 
-    input logic csr_lecture_cycle,
+    input logic csr_lecture_i,
     // HIT du Dcache avant commit 
     input logic dcache_hit_i,
     // Load commit 
     input logic load_commit_i,
     // Load invalid du commit  
     input logic load_invalid_i,
+    // crs commit 
+    input logic csr_commit_i,
+    // csr invalid du commit  
+    input logic csr_invalid_i,
     // Lock le commit 
     output logic protect_en_o
 );
@@ -46,24 +50,32 @@ module timewarp
 
         protect_en_o = 1'b0; 
         // Si on eu un load hit et une lecture, on commence un stall du pipeline.
-        if (hit_en && csr_lecture_cycle) begin 
+        if (hit_en && (csr_lecture_i_b>0) && csr_commit_i ) begin 
             protect_en_o = 1'b1; 
+            $display("[cycle %0d] TIMEWARP PROTECTION begin",nb_cycle);
         // On continue le temps du compteur.
         end else if (compteur_stall !=  0) begin
             protect_en_o = 1'b1;
+            $display("[cycle %0d] TIMEWARP PROTECTION ENABLED",nb_cycle);
         end 
+        if (hit_en && (csr_lecture_i_b>0) && csr_commit_i ) begin 
+            $display("[cycle %0d] Lecture_en ",nb_cycle);
+        end
     end
-    
+    logic [2:0] csr_lecture_i_b;
+
     always_ff @(posedge clk_i or negedge rst_ni) begin
         if (~rst_ni) begin
             hit_en <= 1'b0;
             compteur_hit <= '0;
             compteur_stall <= '0;
             dcache_hit_q <= '0;
+            csr_lecture_i_b  <= '0; 
         end else begin 
             // Compteur des load hit en vol 
             dcache_hit_q <= dcache_hit_q + dcache_hit_i - ((dcache_hit_q>0) && load_commit_i) - ((dcache_hit_q>0) && load_invalid_i);
-            
+            // Compteur des csr lecture en vol 
+            csr_lecture_i_b  <= csr_lecture_i_b + csr_lecture_i  - ((csr_lecture_i_b>0) && csr_commit_i) - ((csr_lecture_i_b>0) && csr_invalid_i);
             // Si on a un load commit et que c'était un hit, on commence le compteur et on active le hit_en.
             if ((dcache_hit_q>0) && load_commit_i) begin
                 hit_en <= 1'b1; 
@@ -75,7 +87,7 @@ module timewarp
                 end
             end 
             // Si on a une Csr lecture commit et un hit_en, on consomme le Hit et on demarre le stall du pipeline pendant x cycle.
-            if (hit_en && csr_lecture_cycle) begin 
+            if (hit_en && (csr_lecture_i_b>0) && csr_commit_i ) begin 
                 hit_en <= 1'b0; 
                 compteur_stall <= STALL_COMMIT[$bits(compteur_stall)-1:0];
             end else if (compteur_stall !=  0) begin
@@ -84,6 +96,48 @@ module timewarp
 
         end 
     end
+    
+    logic protect_en_q;
+    logic hit_en_q;
+    logic [2:0] dcache_hit_c;    
+    int nb_cycle;
+    logic load_commit_q;
+    logic csr_lecture_i_q;
+    logic csr_commit_i_q;
+    always_ff @(posedge clk_i or negedge rst_ni) begin
+        if (!rst_ni) begin
+            protect_en_q  <= 1'b0;
+            hit_en_q      <= 1'b0;
+            dcache_hit_c  <= '0;
+            nb_cycle      <= 0;
+            csr_lecture_i_q <= 1'b0; 
+            csr_commit_i_q   <= 0;
+        end else begin
+            if (csr_commit_i_q != csr_commit_i)
+                $display("[cycle %0d] csr_commit_i,csr_invalid_i -> %0d,%0d", nb_cycle, csr_commit_i,csr_invalid_i);
+        
+            if (dcache_hit_c != dcache_hit_q)
+                $display("[cycle %0d] dcache_hit_cnt -> %0d", nb_cycle, dcache_hit_q);
+        
+            if (protect_en_o != protect_en_q)
+                $display("[cycle %0d] protect_en_o -> %0b \n", nb_cycle, protect_en_o);
 
+            if (hit_en != hit_en_q)
+                $display("[cycle %0d] hit_en -> %0b \n ", nb_cycle, hit_en);
+
+         
+            if (load_commit_i != load_commit_q)
+                $display("[cycle %0d] load_commit_i -> %0b \n", nb_cycle, load_commit_i);
+                
+            csr_commit_i_q <= csr_commit_i ;
+            csr_lecture_i_q <= csr_lecture_i_b ; 
+            protect_en_q <= protect_en_o;
+            hit_en_q <= hit_en;
+            dcache_hit_c <= dcache_hit_q;
+            load_commit_q <= load_commit_i;
+            nb_cycle <= nb_cycle + 1;
+
+        end
+    end
 
 endmodule 

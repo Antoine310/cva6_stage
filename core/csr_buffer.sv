@@ -37,7 +37,9 @@ module csr_buffer
     // commit the pending CSR OP - TO_BE_COMPLETED
     input logic csr_commit_i,
     // CSR address to write - COMMIT_STAGE
-    output logic [11:0] csr_addr_o
+    output logic [11:0] csr_addr_o,
+
+    output logic csr_lecture_o
 );
   // this is a single entry store buffer for the address of the CSR
   // which we are going to need in the commit stage
@@ -70,6 +72,19 @@ module csr_buffer
     end
     // clear the buffer if we flushed
     if (flush_i) csr_reg_n.valid = 1'b0;
+  end
+
+  always_comb begin : Detection_timawarp
+    csr_lecture_o = 1'b0;
+    if (csr_valid_i) begin
+      unique case (fu_data_i.operand_b[11:0])
+        riscv::CSR_CYCLE : csr_lecture_o = 1'b1;
+        riscv::CSR_CYCLEH : csr_lecture_o = 1'b1;
+        default: begin
+            csr_lecture_o = 1'b0;
+          end
+      endcase
+    end 
   end
   // sequential process
   always_ff @(posedge clk_i or negedge rst_ni) begin
