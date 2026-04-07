@@ -36,8 +36,8 @@ module timewarp
     // Lock le commit 
     output logic protect_en_o
 );
-    logic [5:0] compteur_hit;
-    logic [5:0] compteur_stall;
+    logic [$clog2(HIT_TIME+1)-1:0] compteur_hit;
+    logic [$clog2(STALL_COMMIT+1)-1:0] compteur_stall;
 
     logic hit_en ; // Signal d'un Load Hit en cours, Attente si une lecture va s'effectuer dessus 
     logic [2:0] dcache_hit_q; // Compteur pour prendre en compte les load Hit pas encore arriver au commit
@@ -68,7 +68,7 @@ module timewarp
             // Si on a un load commit et que c'était un hit, on commence le compteur et on active le hit_en.
             if ((dcache_hit_q>0) && load_commit_i) begin
                 hit_en <= 1'b1; 
-                compteur_hit <= HIT_TIME;
+                compteur_hit <= HIT_TIME[$bits(compteur_hit)-1:0];
             end else if (compteur_hit != 0) begin
                 compteur_hit <= compteur_hit - 1 ; 
                 if (compteur_hit == 1) begin
@@ -78,12 +78,13 @@ module timewarp
             // Si on a une Csr lecture commit et un hit_en, on consomme le Hit et on demarre le stall du pipeline pendant x cycle.
             if (hit_en && csr_lecture_cycle_i) begin 
                 hit_en <= 1'b0; 
-                compteur_stall <= STALL_COMMIT;
+                compteur_stall <= STALL_COMMIT[$bits(compteur_stall)-1:0];
             end else if (compteur_stall !=  0) begin
                 compteur_stall <= compteur_stall - 1 ; 
             end 
 
         end 
     end
+
 
 endmodule 
