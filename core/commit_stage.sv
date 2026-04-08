@@ -87,7 +87,10 @@ module commit_stage
     // TO_BE_COMPLETED - CONTROLLER
     output logic hfence_vvma_o,
     // TO_BE_COMPLETED - CONTROLLER
-    output logic hfence_gvma_o
+    output logic hfence_gvma_o,
+    input  logic protect_i, 
+    output logic load_commit_valid_o,
+    output logic load_commit_invalid_o
 );
 
   // ila_0 i_ila_commit (
@@ -121,6 +124,9 @@ module commit_stage
     end
   end
 
+  assign load_commit_valid_o = (commit_instr_i[0].valid && commit_ack_o[0] && commit_instr_i[0].fu == LOAD);
+  assign load_commit_invalid_o = (commit_instr_i[0].valid && commit_instr_i[0].fu == LOAD && ( commit_drop_i[0] || commit_instr_i[0].ex.valid || !commit_ack_o[0] ));
+  
   assign commit_tran_id_o = commit_instr_i[0].trans_id;
 
   logic instr_0_is_amo;
@@ -210,7 +216,7 @@ module commit_stage
           csr_op_o    = commit_instr_i[0].op;
           csr_wdata_o = commit_instr_i[0].result;
           if (!commit_drop_i[0]) begin
-            if (!csr_exception_i.valid) begin
+            if (!csr_exception_i.valid && !protect_i) begin
               commit_csr_o = 1'b1;
               wdata_o[0]   = csr_rdata_i;
             end else begin

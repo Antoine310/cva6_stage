@@ -52,7 +52,10 @@ module wt_dcache
     input  dcache_rtrn_t mem_rtrn_i,
     output logic         mem_data_req_o,
     input  logic         mem_data_ack_i,
-    output dcache_req_t  mem_data_o
+    output dcache_req_t  mem_data_o,
+    
+    output logic hit_cache_o
+
 );
 
   localparam DCACHE_CL_IDX_WIDTH = $clog2(CVA6Cfg.DCACHE_NUM_WORDS);
@@ -124,6 +127,7 @@ module wt_dcache
   // wbuffer <-> memory
   wbuffer_t [     CVA6Cfg.WtDcacheWbufDepth-1:0]                                  wbuffer_data;
 
+  assign hit_cache_o = |rd_hit_oh && req_ports_o[1].data_rvalid; 
 
   ///////////////////////////////////////////////////////
   // miss handling unit
