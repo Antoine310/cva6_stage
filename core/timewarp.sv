@@ -50,12 +50,14 @@ module timewarp
     logic reset_charge;
     logic csr_lecture;
 
+    logic [3:0] nombre_hit; 
+
     always_comb begin : charge
 
         charge_d = charge_q; // On recupere la charge en cours 
         // Si lecture csr et hit, on crée une offuscation en rajoutant une charge +10 qu'on envoie au csr_regfile.
         if (csr_lecture && (hit_en)) begin 
-            charge_d = charge_q + 7'd10; 
+            charge_d = charge_q + ((nombre_hit << 3) + (nombre_hit << 1));
         end else if (reset_charge) begin 
             charge_d = '0;
         end
@@ -73,8 +75,14 @@ module timewarp
             charge_q  <= '0;
             reset_charge <= 1'b0;
             csr_lecture <= 1'b0;
+            nombre_hit <= '0;
         end else begin 
-
+            
+            if (csr_lecture_cycle) begin 
+                nombre_hit <= '0;
+            end else begin 
+                nombre_hit <= nombre_hit + ((dcache_hit_q>0) && load_commit_i);
+            end 
             dcache_hit_q <= dcache_hit_q + dcache_hit_i - ((dcache_hit_q>0) && load_commit_i) - ((dcache_hit_q>0) && load_invalid_i);
             // Sauvegarde de la charge en cours
             charge_q  <= charge_d;
