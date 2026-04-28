@@ -1,6 +1,5 @@
-
-volatile int array[1] = {1};
-volatile int biss[1] = {1};
+volatile int array[1] __attribute__((aligned(64))) = {1};
+volatile int biss[1]  __attribute__((aligned(64))) = {1};
 
 int main() {
 
@@ -11,13 +10,16 @@ int main() {
         "la t0, array\n"
         "lw x10, 0(t0)\n"
         "lw x11, 0(t0)\n"
+        
         "csrr x12, cycle\n"
 
         "lw x10, 0(t0)\n"
+        "lw x10, 0(t0)\n"
+        "lw x10, 0(t0)\n"
+        "lw x10, 0(t0)\n"
+
         "csrr x12, cycle\n"
-        "csrr x12, cycle\n"
-        "csrr x12, cycle\n"
-        "csrr x12, cycle\n"
+
 
         "la t0, biss\n"
         "lw x10, 0(t0)\n"

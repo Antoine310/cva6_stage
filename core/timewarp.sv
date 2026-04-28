@@ -38,7 +38,7 @@ module timewarp
     // Ex_stage lecture csr 
     input logic lecture_csr_i,
     // Charge cycle csr_regfile
-    output logic [6:0] charge_o
+    output logic [8:0] charge_o
 );
     logic [$clog2(HIT_TIME+1)-1:0] compteur_hit;
     logic [8:0] compteur_stall;
@@ -46,25 +46,26 @@ module timewarp
     logic hit_en ;
     logic [2:0] dcache_hit_q;
 
-    logic [6:0] charge_q, charge_d;    
+    logic [8:0] charge_q, charge_d;    
     logic reset_charge;
     logic csr_lecture;
 
-    logic [3:0] nombre_hit; 
+    logic [8:0] nombre_hit; 
+    logic hit_enable;
 
     always_comb begin : charge
 
         charge_d = charge_q; // On recupere la charge en cours 
         // Si lecture csr et hit, on crée une offuscation en rajoutant une charge +10 qu'on envoie au csr_regfile.
-        if (csr_lecture && (hit_en)) begin 
-            charge_d = charge_q + ((nombre_hit << 3) + (nombre_hit << 1));
+        if (csr_lecture && nombre_hit > 0 ) begin 
+            charge_d = ((nombre_hit << 3) + (nombre_hit << 1));
         end else if (reset_charge) begin 
             charge_d = '0;
         end
 
     end 
 
-    assign charge_o = charge_d ; // Sortie de la charge en cours.
+    assign charge_o = charge_d ; // Sortie de la charge en cours. 
 
     always_ff @(posedge clk_i or negedge rst_ni) begin
         if (~rst_ni) begin
@@ -76,29 +77,41 @@ module timewarp
             reset_charge <= 1'b0;
             csr_lecture <= 1'b0;
             nombre_hit <= '0;
+            hit_enable <= 1'b0;
         end else begin 
-            
+
+            if (csr_lecture_cycle )begin
+                hit_enable <= 1'b1;
+                
+            end 
+
             if (csr_lecture_cycle) begin 
                 nombre_hit <= '0;
-            end else begin 
-                nombre_hit <= nombre_hit + ((dcache_hit_q>0) && load_commit_i);
-            end 
-            dcache_hit_q <= dcache_hit_q + dcache_hit_i - ((dcache_hit_q>0) && load_commit_i) - ((dcache_hit_q>0) && load_invalid_i);
+            end else if ((dcache_hit_q>0) && load_commit_i && hit_enable ) begin
+                nombre_hit <= nombre_hit + 1'b1;
+            end  
+            dcache_hit_q <= dcache_hit_q + 3'(dcache_hit_i) - 3'((dcache_hit_q>0) && load_commit_i) - 3'((dcache_hit_q>0) && load_invalid_i);
             // Sauvegarde de la charge en cours
             charge_q  <= charge_d;
 
             // Si on a une Lecture csr qui arrive dans le Ex stage, on active le flag
             if (lecture_csr_i)
                 csr_lecture <= 1'b1;
-            else if ((csr_lecture && (hit_en)) || csr_lecture_cycle) // Si on le consomme ou qu'on a pas de hit load (le csr commit est arrive sans load avant), on reset le flag
+            else if (csr_lecture_cycle) // Si on le consomme ou qu'on a pas de hit load (le csr commit est arrive sans load avant), on reset le flag
                 csr_lecture <= 1'b0;
-            // Meme fonctionnement du compteur de Hit que version 1 
+            
             if ((dcache_hit_q > 0) && load_commit_i) begin
                 hit_en <= 1'b1; 
+            end else  if (hit_en && csr_lecture_cycle) begin 
+                hit_en <= 1'b0; 
+            end
+            if ((dcache_hit_q > 0) && load_commit_i && hit_enable) begin
                 compteur_hit <= HIT_TIME[$bits(compteur_hit)-1:0];
             end else if (compteur_hit != 0) begin
                 compteur_hit <= compteur_hit - 1 ; 
                 if (compteur_hit == 1) begin
+                    nombre_hit <= '0;
+                    hit_enable <= 1'b0; 
                     hit_en <= 1'b0; 
                 end
             end 
@@ -106,19 +119,91 @@ module timewarp
             reset_charge <= 1'b0;
             // A partir du commit de la lecture csr, on demarre le timer pendant au minimum de charge cycle + une valeur possible, 
             //si on fait moins on pourrait avoir une incoherence du temps
-            if (hit_en && csr_lecture_cycle) begin 
-                hit_en <= 1'b0; 
-                compteur_stall <= CHARGE_TIME[$bits(compteur_stall)-1:0] + charge_d;
+            if (nombre_hit>0 && csr_lecture_cycle) begin 
+                compteur_stall <= CHARGE_TIME[$bits(compteur_stall)-1:0] + 9'(charge_d);
+                compteur_hit <= '0;
             end else if (csr_lecture_cycle && compteur_stall>0) begin // Lecture donc relance du timer si timer déja lancer et commit csr sans hit load 
-                compteur_stall <= CHARGE_TIME[$bits(compteur_stall)-1:0] + charge_d ;  
+                compteur_stall <= CHARGE_TIME[$bits(compteur_stall)-1:0] + 9'(charge_d);
             end else if (compteur_stall !=  0) begin
                 compteur_stall <= compteur_stall - 1 ; 
                 if (compteur_stall == 1) begin
                     reset_charge <= 1'b1; 
+                    hit_enable <= 1'b0; 
                 end
             end 
-        end 
+        end  
+            
     end
 
 
+    logic hit_en_q;
+    logic csr_cycle_q;
+    logic [2:0] dcache_hit_c;    
+    int nb_cycle;
+    logic load_commit_q;
+    logic lecture_csr_i_q;
+    logic csr_lecture_q;
+    logic [8:0] nombre_hit_q;
+    logic hit_enable_q;
+    logic dcache_hit_i_q;
+    always_ff @(posedge clk_i or negedge rst_ni) begin
+        if (!rst_ni) begin
+            hit_en_q      <= 1'b0;
+            dcache_hit_c  <= '0;
+            csr_cycle_q   <= 1'b0;
+            nb_cycle      <= '0;
+            csr_lecture_q <= 1'b0;
+            lecture_csr_i_q <= 1'b0;
+            nombre_hit_q <= '0;
+            hit_enable_q <= 1'b0;
+            dcache_hit_i_q <=  1'b0;
+        end else begin
+            if (csr_lecture_q != csr_lecture)
+                $display("[cycle %0d] csr_lecture -> %0d", nb_cycle, csr_lecture);
+            if (lecture_csr_i_q != lecture_csr_i)
+                $display("[cycle %0d] lecture_csr_i_q -> %0d", nb_cycle, lecture_csr_i);
+
+
+            if (dcache_hit_c != dcache_hit_q)
+                $display("[cycle %0d] dcache_hit_cnt -> %0d", nb_cycle, dcache_hit_q);
+
+            if (hit_en != hit_en_q)
+                $display("[cycle %0d] hit_en -> %0b \n ", nb_cycle, hit_en);
+
+            if (csr_lecture_cycle != csr_cycle_q)
+                $display("[cycle %0d] csr_lecture_cycle -> %0b \n" , nb_cycle, csr_lecture_cycle);
+
+            if (load_commit_i != load_commit_q)
+                $display("[cycle %0d] load_commit_i -> %0b \n", nb_cycle, load_commit_i);
+
+            if (load_commit_i && load_invalid_i )
+                $display("[cycle %0d] erreur load valid et invalid !\n", nb_cycle);
+
+            if (charge_o != charge_q)
+                $display("[cycle %0d] charge_o -> %0d", nb_cycle, charge_o);
+
+            if (charge_d != charge_q)
+                $display("[cycle %0d] charge_q=%0d charge_d=%0d charge_o=%0d",
+                        nb_cycle, charge_q, charge_d, charge_o);
+            if (nombre_hit_q != nombre_hit )
+                $display("[cycle %0d] nombre_hit -> %0d", nb_cycle, nombre_hit);
+            
+            if (hit_enable_q != hit_enable )
+                $display("[cycle %0d] hit_enable -> %0d", nb_cycle, hit_enable);
+            if (dcache_hit_i_q != dcache_hit_i)
+                $display("[cycle %0d] dcache_hit_i -> %0d", nb_cycle, dcache_hit_i);
+            
+            dcache_hit_i_q <= dcache_hit_i; 
+            hit_enable_q <= hit_enable; 
+            hit_en_q <= hit_en;
+            csr_cycle_q <= csr_lecture_cycle;
+            dcache_hit_c <= dcache_hit_q;
+            load_commit_q <= load_commit_i;
+            csr_lecture_q <= csr_lecture;
+            lecture_csr_i_q <= lecture_csr_i;
+            nombre_hit_q <= nombre_hit; 
+            nb_cycle <= nb_cycle + 1;
+
+        end
+    end
 endmodule 

@@ -171,7 +171,7 @@ module csr_regfile
     // Protect - signal lecture csr commit 
     output logic csr_lecture_cycle,
     // Charge rajouter au nombre de cycle en cas de lecture 
-    input logic [6:0] charge_csr_i
+    input logic [8:0] charge_csr_i
 
 );
 
@@ -327,6 +327,8 @@ module csr_regfile
     assign vsstatus_extended = '0;
   end
 
+  assign cycle_timewarp = cycle_q + 64'(charge_csr_i);
+
   always_comb begin : csr_read_process
     // a read access exception can only occur if we attempt to read a CSR which does not exist
     read_access_exception = 1'b0;
@@ -334,7 +336,6 @@ module csr_regfile
     csr_rdata = '0;
     perf_addr_o = csr_addr.address[11:0];
     csr_lecture_cycle = 1'b0;
-    cycle_timewarp  <= cycle_q + charge_csr_i ;
 
     if (csr_read) begin
       unique case (conv_csr_addr.address)
