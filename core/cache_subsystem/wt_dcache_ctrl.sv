@@ -56,6 +56,9 @@ module wt_dcache_ctrl
     input logic [CVA6Cfg.DCACHE_SET_ASSOC-1:0] rd_vld_bits_i,
     input logic [CVA6Cfg.DCACHE_SET_ASSOC-1:0] rd_hit_oh_i,
     output logic hit_o 
+    //Oussama
+    input  logic miss_force_nc_i
+    //Fin Oussama
 );
 
   // controller FSM
@@ -104,7 +107,7 @@ module wt_dcache_ctrl
   assign miss_size_o = (miss_nc_o) ? {1'b0, data_size_q} : 3'b111;
 
   // noncacheable if request goes to I/O space, or if cache is disabled
-  assign miss_nc_o = (~cache_en_i) | (~config_pkg::is_inside_cacheable_regions(
+  assign miss_nc_o = miss_force_nc_i | (~cache_en_i) | (~config_pkg::is_inside_cacheable_regions(
       CVA6Cfg,
       {{{64-CVA6Cfg.DCACHE_TAG_WIDTH-CVA6Cfg.DCACHE_INDEX_WIDTH}{1'b0}}, address_tag_q, {CVA6Cfg.DCACHE_INDEX_WIDTH{1'b0}}}
   ));

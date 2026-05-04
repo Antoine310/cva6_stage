@@ -73,6 +73,11 @@ module wt_cache_subsystem
     input logic inval_valid_i,
     output logic inval_ready_o,
     output logic hit_cache_o
+    //Oussama
+    input logic [3:0] enclave_id_i,
+    input logic countermeasure_active_i,
+    input logic flush_enclave_i
+    //Fin Oussama
     // TODO: interrupt interface
 );
 
@@ -174,6 +179,11 @@ module wt_cache_subsystem
       .mem_data_ack_i  (adapter_dcache_data_ack),
       .mem_data_o      (dcache_adapter),
       .hit_cache_o     (hit_cache_o)
+      //Oussama
+      .enclave_id_i (enclave_id_i),
+      .countermeasure_active_i (countermeasure_active_i),
+      .flush_enclave_i (flush_enclave_i)
+      //Fin Oussama
   );
 
 
