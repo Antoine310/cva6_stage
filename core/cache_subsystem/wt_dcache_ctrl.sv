@@ -55,7 +55,7 @@ module wt_dcache_ctrl
     input logic [CVA6Cfg.DCACHE_USER_WIDTH-1:0] rd_user_i,
     input logic [CVA6Cfg.DCACHE_SET_ASSOC-1:0] rd_vld_bits_i,
     input logic [CVA6Cfg.DCACHE_SET_ASSOC-1:0] rd_hit_oh_i,
-    output logic hit_o 
+    output logic hit_o,
     //Oussama
     input  logic miss_force_nc_i
     //Fin Oussama

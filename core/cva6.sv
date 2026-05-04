@@ -1365,7 +1365,7 @@ module cva6
         .inval_addr_i      (inval_addr),
         .inval_valid_i     (inval_valid),
         .inval_ready_o     (inval_ready),
-        .hit_cache_o       (dcache_hit_cache)
+        .hit_cache_o       (dcache_hit_cache),
         //Oussama
         .enclave_id_i      (enclave_id),
         .countermeasure_active_i (countermeasure_active),

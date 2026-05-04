@@ -53,7 +53,7 @@ module wt_dcache
     output logic         mem_data_req_o,
     input  logic         mem_data_ack_i,
     output dcache_req_t  mem_data_o,
-    output logic hit_cache_o
+    output logic hit_cache_o,
     //Oussama
     input logic[3:0] enclave_id_i,
     input logic      countermeasure_active_i,
@@ -253,7 +253,7 @@ module wt_dcache
           .rd_user_i      (rd_user),
           .rd_vld_bits_i  (rd_vld_bits),
           .rd_hit_oh_i    (rd_hit_oh),
-          .hit_o          (hit_port[k])             
+          .hit_o          (hit_port[k]),             
           .miss_force_nc_i (miss_force_nc[k])
       );
     end else begin
