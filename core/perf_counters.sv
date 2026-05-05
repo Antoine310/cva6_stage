@@ -208,22 +208,22 @@ module perf_counters
       //Oussama
       //activation of the countermeasure
       if (addr_i == csr_addr_t'(riscv::CSR_MHPM_EVENT_3) && data_i[23]) begin
-      countermeasure_active_o = data_i[23];
+        countermeasure_active_o = data_i[23];
       end else if (addr_i == csr_addr_t'(riscv::CSR_MHPM_EVENT_3) && !data_i[23]) begin
-      countermeasure_active_o = data_i[23];
+        countermeasure_active_o = data_i[23];
       end 
 
       //Enclave ID
       if (addr_i == csr_addr_t'(riscv::CSR_MHPM_EVENT_4) && (data_i[23] || data_i[24] || data_i[25] || data_i[26])) begin
-      enclave_id_o = data_i[26:23];
+        enclave_id_o = data_i[26:23];
       end else if (addr_i == csr_addr_t'(riscv::CSR_MHPM_EVENT_4) && (!data_i[23] && !data_i[24] && !data_i[25] || !data_i[26])) begin
-      enclave_id_o = data_i[26:23]; 
+        enclave_id_o = data_i[26:23]; 
       end
       //FLush data
       if (addr_i == csr_addr_t'(riscv::CSR_MHPM_EVENT_5) && data_i[23]) begin
-      flush_enclave = data_i[23];
+        flush_enclave = data_i[23];
       end else if (addr_i == csr_addr_t'(riscv::CSR_MHPM_EVENT_5) && !data_i[23]) begin
-      flush_enclave = data_i[23];
+        flush_enclave = data_i[23];
       end 
       //Fin Oussama
     end
