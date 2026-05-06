@@ -86,6 +86,9 @@ module perf_counters
   logic [CVA6Cfg.NrCommitPorts-1:0] int_event;
   logic [CVA6Cfg.NrCommitPorts-1:0] fp_event;
 
+  logic countermeasure_active_q;
+  logic countermeasure_active_d;
+
   //Multiplexer
   always_comb begin : Mux
     events[MHPMCounterNum:1] = '{default: 0};
@@ -208,16 +211,20 @@ module perf_counters
       //Oussama
       //activation of the countermeasure
       if (addr_i == csr_addr_t'(riscv::CSR_MHPM_EVENT_3) && data_i[23]) begin
-        countermeasure_active_o = data_i[23];
+        countermeasure_active_d = data_i[23];
+        $display("Active le flag");
       end else if (addr_i == csr_addr_t'(riscv::CSR_MHPM_EVENT_3) && !data_i[23]) begin
-        countermeasure_active_o = data_i[23];
+        countermeasure_active_d = 1'b0;
+        $display("Desac le flag");
       end 
 
       //Enclave ID
       if (addr_i == csr_addr_t'(riscv::CSR_MHPM_EVENT_4) && (data_i[23] || data_i[24] || data_i[25] || data_i[26])) begin
         enclave_id_o = data_i[26:23];
+        $display("Active enclave ");
       end else if (addr_i == csr_addr_t'(riscv::CSR_MHPM_EVENT_4) && (!data_i[23] && !data_i[24] && !data_i[25] || !data_i[26])) begin
-        enclave_id_o = data_i[26:23]; 
+        enclave_id_o = 4'b0000;
+        $display("Desac enclave ");
       end
       //FLush data
       if (addr_i == csr_addr_t'(riscv::CSR_MHPM_EVENT_5) && data_i[23]) begin
@@ -234,10 +241,35 @@ module perf_counters
     if (!rst_ni) begin
       generic_counter_q <= '{default: 0};
       mhpmevent_q       <= '{default: 0};
+      countermeasure_active_q <= 1'b0;
     end else begin
       generic_counter_q <= generic_counter_d;
       mhpmevent_q       <= mhpmevent_d;
+      countermeasure_active_q <= countermeasure_active_d; 
     end
   end
 
+  assign countermeasure_active_o = countermeasure_active_q; 
+
+
+  int nb_cycle ; 
+  always @(posedge clk_i) begin
+     if (|enclave_id_o) begin
+    $display(
+      "[cycle %0d] countermeasure d=%b q=%b o=%b data_i[23]=%b addr_i=%h",
+      nb_cycle,
+      countermeasure_active_d,
+      countermeasure_active_q,
+      countermeasure_active_o,
+      data_i[23],
+      addr_i
+    );
+     end 
+    nb_cycle <= nb_cycle + 1;
+  end
+  always @(posedge clk_i) begin
+    if (|enclave_id_o) begin
+      $display("[ cycle %0d ] Perf_Counter  enclave_id_o = %b", nb_cycle, enclave_id_o);
+    end
+end
 endmodule

@@ -14,9 +14,20 @@ static inline void set_enclave_id(uint8_t id)
     csr_write(CSR_MHPMEVENT4, v);
 }
 
+static inline void desac_enclave_id(uint8_t id)
+{
+    uint32_t v = ((uint32_t)(id & 0xF)) << 23;
+    csr_write(CSR_MHPMEVENT4, v);
+}
+
 static inline void set_secure_flag(void)
 {
     csr_write(CSR_MHPMEVENT3, (1u << 23));
+}
+
+static inline void none_secure_flag(void)
+{
+    csr_write(CSR_MHPMEVENT3, (0u < 23 ));
 }
 
 static inline uint32_t rdcycle(void)
@@ -31,8 +42,8 @@ static inline void keep_u32(uint32_t x) { asm volatile("" :: "r"(x) : "memory");
 
 int main(void)
 {
-    //set_enclave_id(1);
-    //set_secure_flag();
+    set_enclave_id(1);
+    set_secure_flag();
 
 static volatile uint32_t line __attribute__((aligned(64))) = 0x12345678;    volatile uint32_t sink = 0;
 
@@ -46,7 +57,11 @@ static volatile uint32_t line __attribute__((aligned(64))) = 0x12345678;    vola
         sink += line;
     }
     uint64_t t1 = rdcycle();
+    
     fence_rw();
+
+    desac_enclave_id(0);
+    none_secure_flag();
 
     keep_u32(sink);
 

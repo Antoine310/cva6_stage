@@ -362,6 +362,20 @@ module wt_dcache_mem
     );
   end
 
+  int nb_cycle ; 
+  always @(posedge clk_i) begin
+      if(|rd_secure_flag_o)begin
+        $display("[ cycle %0d ] rd_secure_flag_o bit ACTIVE i=%b", nb_cycle, rd_secure_flag_o);
+      end
+      nb_cycle <= nb_cycle + 1 ; 
+  end
+  always @(posedge clk_i) begin
+  for (int j = 0; j < CVA6Cfg.DCACHE_SET_ASSOC; j++) begin
+    if (|rd_enclave_id_tag_o[j]) begin
+      $display("[ cycle %0d ] way %0d enclave_id ACTIVE = %b", nb_cycle, j, rd_enclave_id_tag_o[j]);
+    end
+  end
+end
   for (genvar i = 0; i < CVA6Cfg.DCACHE_SET_ASSOC; i++) begin : gen_tag_srams
     
     //Oussama
@@ -378,6 +392,8 @@ module wt_dcache_mem
     assign tagline = (flush_write)
                    ? {1'b0, 1'b0, 4'b0000, {CVA6Cfg.DCACHE_TAG_WIDTH{1'b0}}}
                    : {vld_wdata[i], countermeasure_active_i, enclave_id_i, wr_cl_tag_i};
+
+
 
     // Tag RAM
     sram_cache #(
