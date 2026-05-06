@@ -27,10 +27,10 @@ static inline void set_secure_flag(void)
 
 static inline void none_secure_flag(void)
 {
-    csr_write(CSR_MHPMEVENT3, (0u < 23 ));
+    csr_write(CSR_MHPMEVENT3, (0u << 23 ));
 }
 
-static inline uint32_t rdcycle(void)
+static inline uint64_t rdcycle(void)
 {
     uint64_t v;
     asm volatile("rdcycle %0" : "=r"(v));
@@ -64,8 +64,22 @@ static volatile uint32_t line __attribute__((aligned(64))) = 0x12345678;    vola
     none_secure_flag();
 
     keep_u32(sink);
+    
+    sink += line;
+    fence_rw();
 
-    uint64_t cycles = t1 - t0;
+    uint64_t t3 = rdcycle();
+
+    for (uint32_t i = 0; i < N; i++) {
+        sink += line;
+    }
+
+    uint64_t t4 = rdcycle();
+
+    uint64_t cycles2 = t1 - t0;
+
+    uint64_t cycles = t4 - t3;
+
 
     printf("\nHit: total=%llu cycles, per_load=%llu + %llu/%u cycles, sink=%u (0x%08x)\n",
            (unsigned long long)cycles,
@@ -73,6 +87,8 @@ static volatile uint32_t line __attribute__((aligned(64))) = 0x12345678;    vola
            (unsigned long long)(cycles % N),
            (unsigned)N,
            (unsigned)sink, (unsigned)sink);
+
+    
 
     return 0;
 }
