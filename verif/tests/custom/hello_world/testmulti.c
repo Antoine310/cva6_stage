@@ -76,9 +76,9 @@ static volatile uint32_t line __attribute__((aligned(64))) = 0x12345678;    vola
 
     uint64_t t4 = rdcycle();
 
-    uint64_t cycles2 = t1 - t0;
+    uint64_t cycles = t1 - t0;
 
-    uint64_t cycles = t4 - t3;
+    uint64_t cycles2 = t4 - t3 ;
 
 
     printf("\nHit: total=%llu cycles, per_load=%llu + %llu/%u cycles, sink=%u (0x%08x)\n",
@@ -88,7 +88,12 @@ static volatile uint32_t line __attribute__((aligned(64))) = 0x12345678;    vola
            (unsigned)N,
            (unsigned)sink, (unsigned)sink);
 
-    
+    printf("\nHit: total=%llu cycles, per_load=%llu + %llu/%u cycles, sink=%u (0x%08x)\n",
+           (unsigned long long)cycles2,
+           (unsigned long long)(cycles2 / N),
+           (unsigned long long)(cycles2 % N),
+           (unsigned)N,
+           (unsigned)sink, (unsigned)sink);       
 
     return 0;
 }

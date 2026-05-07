@@ -41,7 +41,7 @@ module timewarp
     output logic [13:0] charge_o
 );
     logic [$clog2(HIT_TIME+1)-1:0] compteur_hit;
-    logic [8:0] compteur_stall;
+    logic [13:0] compteur_stall;
 
     logic hit_en ;
     logic [2:0] dcache_hit_q;
@@ -119,11 +119,12 @@ module timewarp
             reset_charge <= 1'b0;
             // A partir du commit de la lecture csr, on demarre le timer pendant au minimum de charge cycle + une valeur possible, 
             //si on fait moins on pourrait avoir une incoherence du temps
-            if (nombre_hit>0 && csr_lecture_cycle) begin 
-                compteur_stall <= CHARGE_TIME[$bits(compteur_stall)-1:0] + 9'(charge_d);
+            if (nombre_hit>0 && csr_lecture) begin 
+                compteur_stall <= CHARGE_TIME[$bits(compteur_stall)-1:0] + 13'(charge_q);
                 compteur_hit <= '0;
-            end else if (csr_lecture_cycle && compteur_stall>0) begin // Lecture donc relance du timer si timer déja lancer et commit csr sans hit load 
-                compteur_stall <= CHARGE_TIME[$bits(compteur_stall)-1:0] + 9'(charge_d);
+            end else if (csr_lecture && compteur_stall>0) begin // Lecture donc relance du timer si timer déja lancer et commit csr sans hit load 
+                compteur_stall <= CHARGE_TIME[$bits(compteur_stall)-1:0] + 13'(charge_q);
+                $display("[cycle %0d] Relance la charge ! charge_q=%0d charge_d=%0d ", nb_cycle, charge_q , charge_d) ;
             end else if (compteur_stall !=  0) begin
                 compteur_stall <= compteur_stall - 1 ; 
                 if (compteur_stall == 1) begin
