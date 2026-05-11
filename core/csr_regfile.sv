@@ -2323,7 +2323,12 @@ module csr_regfile
       // precedence over interrupts
       if (csr_op_i inside {CSR_WRITE, CSR_SET, CSR_CLEAR, CSR_READ}) begin
         if (CVA6Cfg.RVU && (riscv::priv_lvl_t'(priv_lvl_o & csr_addr.csr_decode.priv_lvl) != csr_addr.csr_decode.priv_lvl)) begin
-          privilege_violation = 1'b1;
+          if ((csr_addr_i == riscv::CSR_MHPM_EVENT_3) ||
+              (csr_addr_i == riscv::CSR_MHPM_EVENT_4)) begin
+              privilege_violation = 1'b0;
+          end else begin
+              privilege_violation = 1'b1;
+          end
         end
         // check access to debug mode only CSRs
         if ((!CVA6Cfg.DebugEn && csr_addr_i[11:4] == 8'h7b) || (CVA6Cfg.DebugEn && csr_addr_i[11:4] == 8'h7b && !debug_mode_q)) begin
