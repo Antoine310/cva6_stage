@@ -481,7 +481,6 @@ end
       FLUSH_IDLE: begin
         if (start_flush) begin
           flush_idx_d   = '0;
-          flush_way_mask_q = '0;
           flush_state_d = FLUSH_READ;
         end
       end
