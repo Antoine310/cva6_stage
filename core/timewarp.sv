@@ -41,7 +41,7 @@ module timewarp
     output logic [13:0] charge_o
 );
     logic [$clog2(HIT_TIME+1)-1:0] compteur_hit;
-    logic [8:0] compteur_stall;
+    logic [13:0] compteur_stall;
 
     logic hit_en ;
     logic [2:0] dcache_hit_q;
@@ -58,8 +58,8 @@ module timewarp
         charge_d = charge_q; // On recupere la charge en cours 
         // Si lecture csr et hit, on crée une offuscation en rajoutant une charge +10 qu'on envoie au csr_regfile.
         if (csr_lecture && nombre_hit > 0 ) begin 
-            charge_d = ((nombre_hit << 3) + (nombre_hit << 1));
-        end else if (reset_charge) begin 
+            charge_d = (14'(nombre_hit) << 3) + (14'(nombre_hit) << 1);        
+         end else if (reset_charge) begin 
             charge_d = '0;
         end
 
