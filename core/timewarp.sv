@@ -20,8 +20,8 @@ module timewarp
 #(
     parameter config_pkg::cva6_cfg_t CVA6Cfg = config_pkg::cva6_cfg_empty,
     parameter type dcache_req_o_t = logic,
-    parameter int HIT_TIME = 50,    // Delais Hit présent, HIT_TIME > 0 
-    parameter int CHARGE_TIME = 30 // temps ajouter au compteur de la charge 
+    parameter int HIT_TIME = 200,    // Delais Hit présent, HIT_TIME > 0 
+    parameter int CHARGE_TIME = 200 // temps ajouter au compteur de la charge 
 ) (
     // Subsystem Clock - SUBSYSTEM
     input logic clk_i,
@@ -41,7 +41,7 @@ module timewarp
     output logic [13:0] charge_o
 );
     logic [$clog2(HIT_TIME+1)-1:0] compteur_hit;
-    logic [13:0] compteur_stall;
+    logic [$clog2(CHARGE_TIME+1):0] compteur_stall;
 
     logic hit_en ;
     logic [2:0] dcache_hit_q;
@@ -58,7 +58,7 @@ module timewarp
         charge_d = charge_q; // On recupere la charge en cours 
         // Si lecture csr et hit, on crée une offuscation en rajoutant une charge +10 qu'on envoie au csr_regfile.
         if (csr_lecture && nombre_hit > 0 ) begin 
-            charge_d = ((nombre_hit << 3) + (nombre_hit << 1));
+            charge_d = (14'(nombre_hit) * 10) ;
         end else if (reset_charge) begin 
             charge_d = '0;
         end
@@ -129,7 +129,6 @@ module timewarp
                 compteur_stall <= compteur_stall - 1 ; 
                 if (compteur_stall == 1) begin
                     reset_charge <= 1'b1; 
-                    hit_enable <= 1'b0; 
                 end
             end 
         end  
