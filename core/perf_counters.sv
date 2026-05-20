@@ -251,7 +251,7 @@ module perf_counters
 
   assign countermeasure_active_o = countermeasure_active_q; 
 
-
+/*
   int nb_cycle ; 
   always @(posedge clk_i) begin
      if (|enclave_id_o) begin
@@ -271,5 +271,5 @@ module perf_counters
     if (|enclave_id_o) begin
       $display("[ cycle %0d ] Perf_Counter  enclave_id_o = %b", nb_cycle, enclave_id_o);
     end
-end
+end*/ 
 endmodule

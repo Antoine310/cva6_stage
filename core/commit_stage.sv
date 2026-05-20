@@ -436,4 +436,44 @@ module commit_stage
     nb_cycle <= nb_cycle +1 ;
 end
 
+always_ff @(posedge clk_i) begin
+  if (!rst_ni) begin
+    nb_cycle <= 0;
+  end else begin
+
+    // fenêtre intéressante
+    if (nb_cycle >= 6910 && nb_cycle <= 7099) begin
+
+      for (int i = 0; i < CVA6Cfg.NrCommitPorts; i++) begin
+
+        if (commit_instr_i[i].valid) begin
+
+          $display(
+            "[COMMIT] cycle=%0d port=%0d ack=%0d fu=%0d pc=%h rd=x%0d trans=%0d ex=%0d drop=%0d",
+            nb_cycle,
+            i,
+            commit_ack_o[i],
+            commit_instr_i[i].fu,
+            commit_instr_i[i].pc,
+            commit_instr_i[i].rd,
+            commit_instr_i[i].trans_id,
+            commit_instr_i[i].ex.valid,
+            commit_drop_i[i]
+          );
+
+        end
+      end
+
+      // détecter un cycle vide
+      if (!(commit_instr_i[0].valid && commit_ack_o[0]) &&
+          !(commit_instr_i[1].valid && commit_ack_o[1])) begin
+
+        $display("[STALL/BUBBLE] cycle=%0d", nb_cycle);
+
+      end
+    end
+
+    nb_cycle <= nb_cycle + 1;
+  end
+end
 endmodule
