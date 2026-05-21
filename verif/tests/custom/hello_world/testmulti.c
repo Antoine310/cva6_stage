@@ -53,7 +53,7 @@ static volatile uint32_t line __attribute__((aligned(64))) = 0x12345678;    vola
     fence_rw();
 
     uint64_t t0 = rdcycle();
-    for (uint32_t i = 0; i < 2; i++) {
+    for (uint32_t i = 0; i < 1000; i++) {
         sink += line;
     }
     uint64_t t1 = rdcycle();
@@ -70,22 +70,14 @@ static volatile uint32_t line __attribute__((aligned(64))) = 0x12345678;    vola
 
     uint64_t t3 = rdcycle();
 
-    for (uint32_t i = 0; i < 2; i++) {
+    for (uint32_t i = 0; i < 800; i++) {
         sink += line;
     }
 
     uint64_t t4 = rdcycle();
 
 
-    uint64_t u1 = rdcycle();
-
-    for (uint32_t i = 0; i < 2; i++) {
-        sink += line;
-    }
-
-    uint64_t u2 = rdcycle();
-
-    uint64_t cycles = u2 - u1;
+    uint64_t cycles = t1 - t0;
 
     uint64_t cycles2 = t4 - t3 ;
 
