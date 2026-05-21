@@ -92,8 +92,8 @@ int main(void)
     
     //fence_rw();
 
-    //desac_enclave_id(0);
-    //none_secure_flag();
+    desac_enclave_id(0);
+    none_secure_flag();
 
     //keep_u32(sink);
     
