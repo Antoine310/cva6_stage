@@ -39,7 +39,9 @@ module timewarp
     // Ex_stage lecture csr 
     input logic lecture_csr_i,
     // Charge cycle csr_regfile
-    output logic [14:0] charge_o
+    output logic [14:0] charge_o,
+    // Info pour perfcounter
+    output logic hit_event_o
 );
     logic [$clog2(HIT_TIME+1)-1:0] compteur_hit;
     logic [14:0] compteur_stall;
@@ -79,7 +81,10 @@ module timewarp
             csr_lecture <= 1'b0;
             nombre_hit <= '0;
             hit_enable <= 1'b0;
+            hit_event_o  <= 1'b0;
         end else begin 
+
+            hit_event_o <= 1'b0;
 
             if (csr_lecture_cycle )begin
                 hit_enable <= 1'b1;
@@ -91,6 +96,7 @@ module timewarp
             end else if ((dcache_hit_q>0) && load_commit_i && hit_enable ) begin
                 if (nombre_hit < MAX_HIT) begin
                     nombre_hit <= nombre_hit + 1'b1;
+                    hit_event_o <= 1'b1;
                 end
             end  
             dcache_hit_q <= dcache_hit_q + 3'(dcache_hit_i) - 3'((dcache_hit_q>0) && load_commit_i) - 3'((dcache_hit_q>0) && load_invalid_i);

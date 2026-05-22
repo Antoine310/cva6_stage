@@ -575,6 +575,7 @@ module cva6
   logic csr_commit_time;
   logic lecture_csr;
   logic [14:0] time_charge;
+  logic hit_event;
 
   // ----------------------------
   // Performance Counters <-> *
@@ -1191,7 +1192,8 @@ module cva6
         .load_commit_i      (load_commit_timewarp),
         .load_invalid_i     (load_invalid_timewarp),
         .lecture_csr_i      (lecture_csr),
-        .charge_o           (time_charge)
+        .charge_o           (time_charge),
+        .hit_event_o        (hit_event)
     );
   // ------------------------
   // Performance Counters
@@ -1235,6 +1237,7 @@ module cva6
         .i_tlb_flush_i      (flush_tlb_ctrl_ex),
         .stall_issue_i      (stall_issue),
         .mcountinhibit_i    (mcountinhibit_csr_perf),
+        .hit_timewarp_i     (hit_event),
         //Oussama
         .countermeasure_active_o(countermeasure_active),
         .enclave_id_o(enclave_id),

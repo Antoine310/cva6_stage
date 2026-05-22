@@ -58,6 +58,8 @@ module perf_counters
     input logic i_tlb_flush_i,
     input logic stall_issue_i,  //stall-read operands
     input logic [31:0] mcountinhibit_i,
+    //From Timewarp 
+    input logic hit_timewarp_i, 
     //Oussama
     output logic countermeasure_active_o,
     output logic [3:0] enclave_id_o,
@@ -140,6 +142,7 @@ module perf_counters
         5'b10100: events[i] = |int_event;  //Integer instructions
         5'b10101: events[i] = |fp_event;  //Floating Point Instructions
         5'b10110: events[i] = stall_issue_i;  //Pipeline bubbles
+        5'b11100: events[i] = hit_timewarp_i;  //Pipeline bubbles
         default: events[i] = 0;
       endcase
     end
