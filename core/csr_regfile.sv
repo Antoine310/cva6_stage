@@ -2323,11 +2323,14 @@ module csr_regfile
       // precedence over interrupts
       if (csr_op_i inside {CSR_WRITE, CSR_SET, CSR_CLEAR, CSR_READ}) begin
         if (CVA6Cfg.RVU && (riscv::priv_lvl_t'(priv_lvl_o & csr_addr.csr_decode.priv_lvl) != csr_addr.csr_decode.priv_lvl)) begin
-          if ((csr_addr_i == riscv::CSR_MHPM_EVENT_3) ||
-              (csr_addr_i == riscv::CSR_MHPM_EVENT_4) ||
-              (csr_addr_i == riscv::CSR_MHPM_EVENT_5)|| (csr_addr_i == riscv::CSR_HPM_COUNTER_5)) begin
+        if ((csr_addr_i == riscv::CSR_MHPM_EVENT_3) ||
+    (csr_addr_i == riscv::CSR_MHPM_EVENT_4) ||
+    (csr_addr_i == riscv::CSR_MHPM_EVENT_5) ||
+    (csr_addr_i == riscv::CSR_MHPM_EVENT_6) ||
+    (csr_addr_i == riscv::CSR_HPM_COUNTER_5) ||
+    (csr_addr_i == riscv::CSR_HPM_COUNTER_6)) begin
               privilege_violation = 1'b0;
-          end else begin
+          end else begin   
               privilege_violation = 1'b1;
           end
         end
@@ -2340,7 +2343,7 @@ module csr_regfile
         if (CVA6Cfg.RVZihpm) begin
           if (csr_addr_i inside {[riscv::CSR_HPM_COUNTER_3 : riscv::CSR_HPM_COUNTER_31]} |
               csr_addr_i inside {[riscv::CSR_HPM_COUNTER_3H : riscv::CSR_HPM_COUNTER_31H]}) begin
-            if (csr_addr_i == riscv::CSR_HPM_COUNTER_5) begin
+            if (csr_addr_i == riscv::CSR_HPM_COUNTER_5 || csr_addr_i == riscv::CSR_HPM_COUNTER_6 ) begin
                   privilege_violation = 1'b0;
             end else if (priv_lvl_o == riscv::PRIV_LVL_S && CVA6Cfg.RVS) begin
               privilege_violation = ~mcounteren_q[csr_addr_i[4:0]];
