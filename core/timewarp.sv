@@ -61,7 +61,7 @@ module timewarp
         charge_d = charge_q; // On recupere la charge en cours 
         // Si lecture csr et hit, on crée une offuscation en rajoutant une charge +10 qu'on envoie au csr_regfile.
         if (csr_lecture && nombre_hit > 0 ) begin 
-            charge_d = (nombre_hit << 4) + (nombre_hit << 3) + (nombre_hit << 2) + (nombre_hit << 1);        
+            charge_d = ({4'b0, nombre_hit} << 4) + ({4'b0, nombre_hit} << 3) + ({4'b0, nombre_hit} << 2) + ({4'b0, nombre_hit} << 1);       
         end else if (reset_charge) begin 
             charge_d = '0;
         end
@@ -94,7 +94,7 @@ module timewarp
             if (csr_lecture_cycle) begin 
                 nombre_hit <= '0;
             end else if ((dcache_hit_q>0) && load_commit_i && hit_enable ) begin
-                if (nombre_hit < MAX_HIT) begin
+                if (nombre_hit < 11'(MAX_HIT)) begin
                     nombre_hit <= nombre_hit + 1'b1;
                     hit_event_o <= 1'b1;
                 end
@@ -183,8 +183,8 @@ module timewarp
             if (csr_lecture_cycle != csr_cycle_q)
                 $display("[cycle %0d] csr_lecture_cycle -> %0b \n" , nb_cycle, csr_lecture_cycle);
 
-            if (load_commit_i != load_commit_q)
-                $display("[cycle %0d] load_commit_i -> %0b \n", nb_cycle, load_commit_i);
+            //if (load_commit_i != load_commit_q)
+            //    $display("[cycle %0d] load_commit_i -> %0b \n", nb_cycle, load_commit_i);
 
             if (load_commit_i && load_invalid_i )
                 $display("[cycle %0d] erreur load valid et invalid !\n", nb_cycle);

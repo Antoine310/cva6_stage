@@ -421,13 +421,7 @@ module commit_stage
         if (commit_instr_i[i].valid && commit_ack_o[i]) begin
           
           if (commit_instr_i[i].fu == LOAD) begin
-            $display("[LOAD COMMIT] cycle=%0d port=%0d rd=x%0d trans_id=%0d pc=%h",
-              nb_cycle,
-              i,
-              commit_instr_i[i].rd,
-              commit_instr_i[i].trans_id,
-              commit_instr_i[i].pc
-            );
+
           end
 
         end
