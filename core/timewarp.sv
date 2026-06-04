@@ -20,9 +20,9 @@ module timewarp
 #(
     parameter config_pkg::cva6_cfg_t CVA6Cfg = config_pkg::cva6_cfg_empty,
     parameter type dcache_req_o_t = logic,
-    parameter int HIT_TIME = 1200,    // Delais Hit présent, HIT_TIME > 0 
-    parameter int CHARGE_TIME = 1000, // temps ajouter au compteur de la charge 
-    parameter int MAX_HIT = 2000
+    parameter int LECTURE_TIME = 10000,    // Delais Lecture présent, HIT_TIME > 0 
+    parameter int CHARGE_TIME = 10000, // temps ajouter au compteur de la charge 
+    parameter int MAX_HIT = 1000
 ) (
     // Subsystem Clock - SUBSYSTEM
     input logic clk_i,
@@ -43,8 +43,8 @@ module timewarp
     // Info pour perfcounter
     output logic hit_event_o
 );
-    logic [$clog2(HIT_TIME+1)-1:0] compteur_hit;
-    logic [14:0] compteur_stall;
+    logic [$clog2(LECTURE_TIME+1)-1:0] compteur_lecture;
+    logic [14:0] compteur_coherence_temps;
 
     logic hit_en ;
     logic [2:0] dcache_hit_q;
@@ -55,6 +55,7 @@ module timewarp
 
     logic [10:0] nombre_hit; 
     logic hit_enable;
+    logic deblocage_lecture;
 
     always_comb begin : charge
 
@@ -73,8 +74,8 @@ module timewarp
     always_ff @(posedge clk_i or negedge rst_ni) begin
         if (~rst_ni) begin
             hit_en <= 1'b0;
-            compteur_hit <= '0;
-            compteur_stall <= '0;
+            compteur_lecture <= '0;
+            compteur_coherence_temps <= '0;
             dcache_hit_q <= '0;
             charge_q  <= '0;
             reset_charge <= 1'b0;
@@ -82,18 +83,17 @@ module timewarp
             nombre_hit <= '0;
             hit_enable <= 1'b0;
             hit_event_o  <= 1'b0;
+            deblocage_lecture <= 1'b0;  
         end else begin 
 
             hit_event_o <= 1'b0;
 
-            if (csr_lecture_cycle )begin
+            if (csr_lecture_cycle)begin
                 hit_enable <= 1'b1;
-                
+                deblocage_lecture <= 1'b1;
             end 
 
-            if (csr_lecture_cycle) begin 
-                nombre_hit <= '0;
-            end else if ((dcache_hit_q>0) && load_commit_i && hit_enable ) begin
+            if ((dcache_hit_q>0) && load_commit_i && hit_enable ) begin
                 if (nombre_hit < 11'(MAX_HIT)) begin
                     nombre_hit <= nombre_hit + 1'b1;
                     hit_event_o <= 1'b1;
@@ -114,11 +114,13 @@ module timewarp
             end else  if (hit_en && csr_lecture_cycle) begin 
                 hit_en <= 1'b0; 
             end
-            if ((dcache_hit_q > 0) && load_commit_i && hit_enable) begin
-                compteur_hit <= HIT_TIME[$bits(compteur_hit)-1:0];
-            end else if (compteur_hit != 0) begin
-                compteur_hit <= compteur_hit - 1 ; 
-                if (compteur_hit == 1) begin
+            
+            if (deblocage_lecture) begin
+                compteur_lecture <= LECTURE_TIME[$bits(compteur_lecture)-1:0];
+                deblocage_lecture <= 1'b0; 
+            end else if (compteur_lecture != 0) begin
+                compteur_lecture <= compteur_lecture - 1 ; 
+                if (compteur_lecture == 1) begin
                     nombre_hit <= '0;
                     hit_enable <= 1'b0; 
                     hit_en <= 1'b0; 
@@ -129,15 +131,18 @@ module timewarp
             // A partir du commit de la lecture csr, on demarre le timer pendant au minimum de charge cycle + une valeur possible, 
             //si on fait moins on pourrait avoir une incoherence du temps
             if (nombre_hit>0 && csr_lecture) begin 
-                compteur_stall <=  15'(CHARGE_TIME) +  charge_q;
-                compteur_hit <= '0;
-            end else if (csr_lecture && compteur_stall>0) begin // Lecture donc relance du timer si timer déja lancer et commit csr sans hit load 
-                compteur_stall <=  15'(CHARGE_TIME) + charge_q;
+                compteur_coherence_temps <=  15'(CHARGE_TIME) +  charge_d;
+                compteur_lecture <= '0;
+            end else if (csr_lecture && compteur_coherence_temps > 0) begin // Lecture donc relance du timer si timer déja lancer et commit csr sans hit load 
+                compteur_coherence_temps <=  15'(CHARGE_TIME) + charge_d;
                 $display("[cycle %0d] Relance la charge ! charge_q=%0d charge_d=%0d ", nb_cycle, charge_q , charge_d) ;
-            end else if (compteur_stall !=  0) begin
-                compteur_stall <= compteur_stall - 1 ; 
-                if (compteur_stall == 1) begin
+            end else if (compteur_coherence_temps !=  0) begin
+                compteur_coherence_temps <= compteur_coherence_temps - 1 ; 
+                if (compteur_coherence_temps == 1) begin
                     reset_charge <= 1'b1; 
+                    nombre_hit <= '0;
+                    hit_enable <= 1'b0; 
+                    hit_en <= 1'b0; 
                 end
             end 
         end  
@@ -174,8 +179,8 @@ module timewarp
                 $display("[cycle %0d] lecture_csr_i_q -> %0d", nb_cycle, lecture_csr_i);
 
 
-            if (dcache_hit_c != dcache_hit_q)
-                $display("[cycle %0d] dcache_hit_cnt -> %0d", nb_cycle, dcache_hit_q);
+            //if (dcache_hit_c != dcache_hit_q)
+             //   $display("[cycle %0d] dcache_hit_cnt -> %0d", nb_cycle, dcache_hit_q);
 
             if (hit_en != hit_en_q)
                 $display("[cycle %0d] hit_en -> %0b \n ", nb_cycle, hit_en);
@@ -200,8 +205,8 @@ module timewarp
             
             if (hit_enable_q != hit_enable )
                 $display("[cycle %0d] hit_enable -> %0d", nb_cycle, hit_enable);
-            if (dcache_hit_i_q != dcache_hit_i)
-                $display("[cycle %0d] dcache_hit_i -> %0d", nb_cycle, dcache_hit_i);
+            //if (dcache_hit_i_q != dcache_hit_i)
+            //    $display("[cycle %0d] dcache_hit_i -> %0d", nb_cycle, dcache_hit_i);
             
             dcache_hit_i_q <= dcache_hit_i; 
             hit_enable_q <= hit_enable; 
