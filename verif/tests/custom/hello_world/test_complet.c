@@ -113,11 +113,8 @@ int main(void)
     uint64_t cycles2 = t4 - t3 ;
 
 
-    print_str("cycles1 = ");
-    print_hex(cycles);
-
-    print_str("cycles2 = ");
-    print_hex(cycles2);
+    printf("\n Boucle Hit 1 : total=%llu cycles\n", (unsigned long long)cycles);
+    printf("\n Boucle Hit 2 : total=%llu cycles\n", (unsigned long long)cycles2);
 
 
     return 0;

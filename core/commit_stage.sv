@@ -429,7 +429,7 @@ module commit_stage
     end
     nb_cycle <= nb_cycle +1 ;
 end
-
+/*
 always_ff @(posedge clk_i) begin
   if (!rst_ni) begin
     nb_cycle <= 0;
@@ -469,5 +469,5 @@ always_ff @(posedge clk_i) begin
 
     nb_cycle <= nb_cycle + 1;
   end
-end
+end*/
 endmodule
