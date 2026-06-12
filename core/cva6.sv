@@ -569,7 +569,7 @@ module cva6
   logic load_invalid_timewarp;
   logic csr_commit_time;
   logic lecture_csr;
-  logic [13:0] time_charge;
+  logic [31:0] time_charge;
 
   // ----------------------------
   // Performance Counters <-> *

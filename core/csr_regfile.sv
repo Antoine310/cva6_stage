@@ -171,7 +171,7 @@ module csr_regfile
     // Protect - signal lecture csr commit 
     output logic csr_lecture_cycle,
     // Charge rajouter au nombre de cycle en cas de lecture 
-    input logic [13:0] charge_csr_i
+    input logic [31:0] charge_csr_i
 
 );
 
