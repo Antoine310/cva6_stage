@@ -581,7 +581,7 @@ module csr_regfile
         riscv::CSR_CYCLEH:
         if (CVA6Cfg.RVZicntr) begin
           if (CVA6Cfg.XLEN == 32) begin 
-            csr_rdata = cycle_timewarp[63:32] ;
+            csr_rdata = {32'b0, cycle_timewarp[63:32]};
             csr_lecture_cycle = 1'b1;
           end else begin 
             read_access_exception = 1'b1;

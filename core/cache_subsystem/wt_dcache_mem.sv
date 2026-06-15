@@ -627,5 +627,14 @@ end
 
 `endif
   //pragma translate_on
+initial begin
+  $display("DCACHE_NUM_WORDS  = %0d", CVA6Cfg.DCACHE_NUM_WORDS);
+  $display("DCACHE_LINE_WIDTH = %0d", CVA6Cfg.DCACHE_LINE_WIDTH);
+  $display("DCACHE_SET_ASSOC   = %0d", CVA6Cfg.DCACHE_SET_ASSOC);
+  $display("DCACHE_INDEX_WIDTH = %0d", CVA6Cfg.DCACHE_INDEX_WIDTH);
+  $display("DCACHE_OFFSET_WIDTH= %0d", CVA6Cfg.DCACHE_OFFSET_WIDTH);
+end
+
+
 
 endmodule  // wt_dcache_mem

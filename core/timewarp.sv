@@ -61,7 +61,7 @@ module timewarp
         charge_d = charge_q; // On recupere la charge en cours 
         // Si lecture csr et hit, on crée une offuscation en rajoutant une charge +10 qu'on envoie au csr_regfile.
         if (csr_lecture && nombre_hit > 0 ) begin 
-            charge_d = (nombre_hit << 4) + ( nombre_hit << 3) + ( nombre_hit<< 2) + ( nombre_hit << 1);        
+            charge_d = nombre_hit * 6  ;   
         end else if (reset_charge) begin 
             charge_d = '0;
         end
@@ -117,17 +117,16 @@ module timewarp
             if (deblocage_lecture) begin
                 compteur_lecture <= LECTURE_TIME[$bits(compteur_lecture)-1:0];
                 deblocage_lecture <= 1'b0; 
-                $display("[cycle %0d] START compteur_lecture timer = %0d",
-         nb_cycle,
-         LECTURE_TIME);
+                //$display("[cycle %0d] START compteur_lecture timer = %0d",
+         //nb_cycle , LECTURE_TIME);
             end else if (compteur_lecture != 0) begin
                 compteur_lecture <= compteur_lecture - 1 ; 
                 if (compteur_lecture == 1) begin
                     nombre_hit <= '0;
                     hit_enable <= 1'b0; 
                     hit_en <= 1'b0; 
-                    $display("[cycle %0d] END compteur_lecture timer ",
-         nb_cycle);
+                    //$display("[cycle %0d] END compteur_lecture timer ",
+         //nb_cycle);
                 end
             end 
 
@@ -137,15 +136,15 @@ module timewarp
             if (nombre_hit>0 && deblocage_lecture) begin 
                 compteur_coherence_temps <=  32'(CHARGE_TIME) +  charge_d;
                 compteur_lecture <= '0;
-                $display("[cycle %0d] START coherence_timer hits=%0d charge=%0d total=%0d",
+                /*$display("[cycle %0d] START coherence_timer hits=%0d charge=%0d total=%0d",
                     nb_cycle,
                     nombre_hit,
                     charge_d,
-                     32'(CHARGE_TIME) + charge_d);
+                     32'(CHARGE_TIME) + charge_d);*/
             end else if (deblocage_lecture && compteur_coherence_temps > 0) begin // Lecture donc relance du timer si timer déja lancer et commit csr sans hit load 
                 compteur_coherence_temps <=  32'(CHARGE_TIME) + charge_d;
                 compteur_lecture <= '0;
-                $display("[cycle %0d] Relance la charge timer ! charge_q=%0d charge_d=%0d ", nb_cycle, charge_q , charge_d) ;
+                //$display("[cycle %0d] Relance la charge timer ! charge_q=%0d charge_d=%0d ", nb_cycle, charge_q , charge_d) ;
             end else if (compteur_coherence_temps !=  0) begin
                 compteur_coherence_temps <= compteur_coherence_temps - 1 ; 
                 if (compteur_coherence_temps == 1) begin
@@ -153,8 +152,8 @@ module timewarp
                     nombre_hit <= '0;
                     hit_enable <= 1'b0; 
                     hit_en <= 1'b0; 
-                    $display("[cycle %0d] END coherence_timer",
-         nb_cycle);
+                    //$display("[cycle %0d] END coherence_timer",
+         //nb_cycle);
                 end
             end 
         end  
@@ -162,7 +161,7 @@ module timewarp
     end
 
 
-    
+    /*
     logic hit_en_q;
     logic csr_cycle_q;
     logic [4:0] dcache_hit_c;    
@@ -189,7 +188,6 @@ module timewarp
                 $display("[cycle %0d] csr_lecture -> %0d", nb_cycle, csr_lecture);
             if (lecture_csr_i_q != lecture_csr_i)
                 $display("[cycle %0d] lecture_csr_i_q -> %0d", nb_cycle, lecture_csr_i);
-
 
             if (dcache_hit_c != dcache_hit_q)
                 $display("[cycle %0d] dcache_hit_cnt -> %0d", nb_cycle, dcache_hit_q);
@@ -232,5 +230,5 @@ module timewarp
             nb_cycle <= nb_cycle + 1;
 
         end
-    end
+    end*/
 endmodule 
