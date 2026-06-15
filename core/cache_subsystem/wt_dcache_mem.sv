@@ -362,12 +362,10 @@ module wt_dcache_mem
     );
   end
 
-  int nb_cycle ; 
   always @(posedge clk_i) begin
       if(|rd_secure_flag_o)begin
         //$display("[ cycle %0d ] rd_secure_flag_o bit ACTIVE i=%b", nb_cycle, rd_secure_flag_o);
       end
-      nb_cycle <= nb_cycle + 1 ; 
   end
   always @(posedge clk_i) begin
   for (int j = 0; j < CVA6Cfg.DCACHE_SET_ASSOC; j++) begin
@@ -627,13 +625,33 @@ end
 
 `endif
   //pragma translate_on
+  /* 
 initial begin
   $display("DCACHE_NUM_WORDS  = %0d", CVA6Cfg.DCACHE_NUM_WORDS);
   $display("DCACHE_LINE_WIDTH = %0d", CVA6Cfg.DCACHE_LINE_WIDTH);
   $display("DCACHE_SET_ASSOC   = %0d", CVA6Cfg.DCACHE_SET_ASSOC);
   $display("DCACHE_INDEX_WIDTH = %0d", CVA6Cfg.DCACHE_INDEX_WIDTH);
   $display("DCACHE_OFFSET_WIDTH= %0d", CVA6Cfg.DCACHE_OFFSET_WIDTH);
-end
+end */ 
+  int nb_cycle;
+  always @(posedge clk_i) begin
+    for (int w = 0; w < CVA6Cfg.DCACHE_SET_ASSOC; w++) begin
+      if (vld_req[w] && vld_we) begin
+        $display(
+          "[cycle %0d] CACHE_ALLOC way=%0d set=%0d tag=%h valid=%0b secure=%0b enclave=%0d",
+          nb_cycle,
+          w,
+          vld_addr,
+          wr_cl_tag_i,
+          vld_wdata[w],
+          countermeasure_active_i,
+          enclave_id_i
+        );
+      end
+    end
+
+    nb_cycle <= nb_cycle + 1;
+  end
 
 
 

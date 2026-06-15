@@ -232,6 +232,7 @@ module wt_dcache_missunit
     ~(((1 << PROTECTED_WAYS) - 1)) : 
     {CVA6Cfg.DCACHE_SET_ASSOC{1'b1}}; 
 
+
   assign cur_vld_bits = miss_vld_bits_i[miss_port_idx];
   assign inv_allow_vec      = (~miss_vld_bits_i[miss_port_idx]) & way_allow_mask;
   
@@ -313,6 +314,24 @@ module wt_dcache_missunit
   assign repl_way = (countermeasure_active_i && enclave_id_i != 4'b0000) ?
                     alt_repl_way :
                     ((all_allow_ways_valid) ? rnd_way : inv_way);
+  
+  int nb_cycle;
+
+  always @(posedge clk_i) begin
+    if (mshr_allocate) begin
+      $display(
+        "[cycle %0d] MISS_ALLOC addr=%h repl_way=%0d inv_way=%0d rnd_way=%0d",
+        nb_cycle,
+        miss_paddr_i[miss_port_idx],
+        repl_way,
+        inv_way,
+        rnd_way
+      );
+    end
+    
+    nb_cycle <= nb_cycle + 1;
+
+  end
   
   //Fin Oussama
   

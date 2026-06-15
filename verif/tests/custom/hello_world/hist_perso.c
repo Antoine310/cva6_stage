@@ -44,19 +44,30 @@ static inline void set_enclave_id(uint8_t id)
     csr_write(CSR_MHPMEVENT4, v);
 }
 
-#define PRIME_N 10
+#define PRIME_T 20 // taille tab
+#define PRIME_P 8 // Prime probe
+#define PRIME_I 16 // Init 
 #define PRIME_STRIDE 4096
-char __attribute__((aligned(4096))) buffer[(PRIME_N  + 2) * PRIME_STRIDE];
+char __attribute__((aligned(4096))) buffer[(PRIME_T ) * PRIME_STRIDE];
 
+static inline void Init_cache (void *addr) // set le cache pour avoir la bonne mesure prime probe 
+{
+    size_t pset = (((size_t)addr) >> 4) & 0xFF; // Init le set pour le cache 
+    size_t other_set = (pset + 1) & 0xFF;
 
+    for (int k = PRIME_P + 1 ; k <= PRIME_I ; k++) {
+        maccess(buffer + k * PRIME_STRIDE + (other_set << 4)); // Calcul adresse buffet + index dans buffer + bon set 
+    }
 
-
+    asm volatile("fence");
+}
 static inline void prime_probe(void *addr) // set le cache pour avoir la bonne mesure prime probe 
 {
     size_t pset = (((size_t)addr) >> 4) & 0xFF; // Init le set pour le cache 
+    size_t other_set = (pset + 1) & 0xFF;
 
-    for (int k = 1; k <= PRIME_N - 2 ; k++) {
-        maccess(buffer + k * PRIME_STRIDE + (pset << 4)); // Calcul adresse buffet + index dans buffer + bon set 
+    for (int k = 1; k <= PRIME_P ; k++) {
+        maccess(buffer + k * PRIME_STRIDE + (other_set << 4));
     }
 
     asm volatile("fence");
@@ -65,9 +76,10 @@ static inline void prime_probe(void *addr) // set le cache pour avoir la bonne m
 static inline void victime(void *addr)
 {
     size_t pset = (((size_t)addr) >> 4) & 0xFF; // Init le set pour le cache 
+    size_t other_set = (pset + 1) & 0xFF;
 
-    maccess(buffer + 9 * PRIME_STRIDE + (pset << 4)); // Calcul adresse buffet + index dans buffer + bon set 
-    maccess(buffer + 10 * PRIME_STRIDE + (pset << 4)); // Calcul adresse buffet + index dans buffer + bon set 
+    maccess(buffer + 17 * PRIME_STRIDE + (other_set << 4)); // Calcul adresse buffet + index dans buffer + bon set 
+    maccess(buffer + 18 * PRIME_STRIDE + (other_set << 4)); // Calcul adresse buffet + index dans buffer + bon set 
     
     asm volatile("fence");
 }
@@ -193,22 +205,33 @@ void measure_prime_ref(void *address, size_t *histogram, size_t number_of_measur
   }
 }
 
+
 void measure_prime_probe(void *address, size_t *histogram, size_t number_of_measurements) {
 
   for (size_t i = 0; i < number_of_measurements; i++) {
 
+    Init_cache(address);
     prime_probe(address); 
 
-    uint64_t e0 = read_csr(CSR_HPMCOUNTER7);
+    //uint64_t m0 = read_csr(CSR_HPMCOUNTER6);
+    //uint64_t e0 = read_csr(CSR_HPMCOUNTER7);
     victime(address);
-    uint64_t e1 = read_csr(CSR_HPMCOUNTER7);
+    //uint64_t e1 = read_csr(CSR_HPMCOUNTER7);
+    //uint64_t m1 = read_csr(CSR_HPMCOUNTER6);
 
-    size_t probe = measure_access_time(address); 
+    size_t probe = measure_access_time(address);
 
-    victim_evict[i]= (e1-e0);
+    //uint64_t e2 = read_csr(CSR_HPMCOUNTER7);
 
-    check_evinc_victime = check_evinc_victime + (e1-e0);
+    //uint64_t m2 = read_csr(CSR_HPMCOUNTER6);
+    
+    //victim_miss[i] = (m1-m0); 
+    //victim_evict[i]= (e1-e0);
+    //probe_miss[i] =(e2-e1) ;
 
+    //check_evinc_victime = check_evinc_victime + (e1-e0);
+    //check_miss_prime_probe = check_miss_prime_probe + (m2-m1); 
+    //check_miss_victime = check_miss_victime + (m1-m0); 
     cumul_prime = cumul_prime + probe ; 
 
     if (probe > max_probe) max_probe = probe;
@@ -283,32 +306,40 @@ int main(int argc, char *argv[]) {
 
   memset(address, 1, 4096);
   memset(buffer, 2, sizeof(buffer));
+  /* 
+  for (uint64_t i=0; i<10; i++) {
 
-  for(int k=1;k<=10;k++) {
+      Init_cache(address);
 
-    prime_probe(address); 
+      prime_probe(address);
 
-    uint64_t e0 = read_csr(CSR_HPMCOUNTER7);
-    victime(address);
-    uint64_t e1 = read_csr(CSR_HPMCOUNTER7);
+      uint64_t e0 = read_csr(CSR_HPMCOUNTER7);
 
-    printf("i=%lu, e = %lu \n",k,(e1-e0));
+      victime(address);
 
-  }
-  measure_prime_ref(address, hit_histogram, MEASUREMENTS);
+      asm volatile("fence rw,rw");
+
+      uint64_t e1 = read_csr(CSR_HPMCOUNTER7);
+
+      printf("evictions=%lu\n",
+            (unsigned long)(e1-e0));
+  }*/
+  //measure_prime_ref(address, hit_histogram, MEASUREMENTS);
   measure_prime_probe(address, miss_histogram, MEASUREMENTS);
 
   printf("max_ref=%lu\n", (unsigned long)max_ref);
   printf("moyenne cumul ref =%lu\n", (unsigned long)cumul_ref/MEASUREMENTS);
-  printf("moyenne check_miss_ref =%lu\n", (unsigned long)check_miss_ref/MEASUREMENTS ); // Normalement 0
-  /*
+  //printf("moyenne check_miss_ref =%lu\n", (unsigned long)check_miss_ref/MEASUREMENTS ); // Normalement 0
+  
   printf("max_probe=%lu\n", (unsigned long)max_probe);
   printf("moyenne cumul prime_probe =%lu\n", (unsigned long)cumul_prime/MEASUREMENTS);
+
+  /*
   printf("moyenne check_miss_victime =%lu\n", (unsigned long)check_miss_victime/MEASUREMENTS ); // normalement 1 ici  
   printf("moyenne check_miss_prime_probe =%lu\n", (unsigned long)check_miss_prime_probe/MEASUREMENTS );  // nombre de lignes de l'attaquant evinc par la victime
   printf("moyenne check_evinc_victime =%lu\n", (unsigned long)check_evinc_victime/MEASUREMENTS ); // normalement 1 ici  
   */
-  
+  /*
   printf("\n===== REF =====\n");
   for (size_t i = 0; i < MEASUREMENTS; i++) {
       printf("Prime Ref i : %lu , nombre miss = %lu\n",
@@ -318,10 +349,12 @@ int main(int argc, char *argv[]) {
 
   printf("\n===== PRIME+PROBE =====\n");
   for (size_t i = 0; i < MEASUREMENTS; i++) {
-      printf("Prime probe i : %lu , evinc victime = %lu \n",
+      printf("Prime probe i : %lu , evinc victime = %lu , miss victime = %lu , miss probe = %lu\n",
             (unsigned long)i,
-            (unsigned long)victim_evict[i]);
-  }
+            (unsigned long)victim_evict[i],
+            (unsigned long)victim_miss[i],
+            (unsigned long)probe_miss[i]);
+  }*/
   /*
   for (size_t i = 0; i < HISTOGRAM_ENTRIES; i += HISTOGRAM_SCALE) {
     size_t hit = 0, miss = 0;
@@ -335,3 +368,4 @@ int main(int argc, char *argv[]) {
    
   return 0;
 }
+
