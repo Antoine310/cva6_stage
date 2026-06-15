@@ -73,7 +73,12 @@ module wt_dcache_missunit
     input dcache_rtrn_t mem_rtrn_i,
     output logic mem_data_req_o,
     input logic mem_data_ack_i,
-    output dcache_req_t mem_data_o
+    output dcache_req_t mem_data_o,
+    //Oussama
+    input logic [3:0] enclave_id_i,
+    input logic       countermeasure_active_i,
+    input logic [3:0] rd_enclave_id_tag [CVA6Cfg.DCACHE_SET_ASSOC-1:0],
+    input logic [CVA6Cfg.DCACHE_SET_ASSOC-1:0]     rd_secure_flag
 );
 
   // functions
@@ -187,13 +192,27 @@ module wt_dcache_missunit
   // MSHR and way replacement logic (only for read ops)
   ///////////////////////////////////////////////////////
 
+
+    //Oussama 
+  logic [$clog2(CVA6Cfg.DCACHE_SET_ASSOC)-1:0] alt_repl_way;
+  logic [$clog2(CVA6Cfg.DCACHE_SET_ASSOC)-1:0] our_line_index;
+  logic [$clog2(CVA6Cfg.DCACHE_SET_ASSOC)-1:0] nonsc_line_index;
+  logic found_our_line, found_nonsc_line;
+  logic [(CVA6Cfg.DCACHE_SET_ASSOC)-1:0] cur_vld_bits;
+  localparam int unsigned PROTECTED_WAYS = 2; // way0 & way1
+
+  logic [CVA6Cfg.DCACHE_SET_ASSOC-1:0] way_allow_mask;
+  logic [CVA6Cfg.DCACHE_SET_ASSOC-1:0] inv_allow_vec;
+  logic all_allow_ways_valid;
+  logic [$clog2(CVA6Cfg.DCACHE_SET_ASSOC)-1:0] rnd_way_allowed;
+
   // find invalid cache line
   lzc #(
       .WIDTH(CVA6Cfg.DCACHE_SET_ASSOC)
   ) i_lzc_inv (
-      .in_i   (~miss_vld_bits_i[miss_port_idx]),
+      .in_i   (inv_allow_vec),
       .cnt_o  (inv_way),
-      .empty_o(all_ways_valid)
+      .empty_o(all_allow_ways_valid)
   );
 
   // generate random cacheline index
@@ -206,8 +225,82 @@ module wt_dcache_missunit
       .en_i  (update_lfsr),
       .out_o (rnd_way)
   );
+   
+  assign way_allow_mask =
+   (countermeasure_active_i && (enclave_id_i != 4'b0000)) ?
+    ~(((1 << PROTECTED_WAYS) - 1)) : 
+    {CVA6Cfg.DCACHE_SET_ASSOC{1'b1}}; 
 
-  assign repl_way             = (all_ways_valid) ? rnd_way : inv_way;
+  assign cur_vld_bits = miss_vld_bits_i[miss_port_idx];
+  assign inv_allow_vec      = (~miss_vld_bits_i[miss_port_idx]) & way_allow_mask;
+  
+  int idx;
+
+  always_comb begin
+     rnd_way_allowed = rnd_way;
+    if ((way_allow_mask[rnd_way] == 1'b0)) begin
+      // cherche la prochaine way autorisée
+      rnd_way_allowed = '0;
+     for (int t = 0; t < CVA6Cfg.DCACHE_SET_ASSOC; t++) begin
+        idx = (rnd_way + t) % CVA6Cfg.DCACHE_SET_ASSOC;
+        if (way_allow_mask[idx]) begin
+          rnd_way_allowed = idx[$clog2(CVA6Cfg.DCACHE_SET_ASSOC)-1:0];
+        break;
+        end
+      end
+    end  
+  end
+
+  always_comb begin
+    // init
+    found_our_line    = 1'b0;
+    our_line_index    = '0;
+    found_nonsc_line  = 1'b0;
+    nonsc_line_index  = '0;
+    alt_repl_way      = inv_way;
+
+    // 1) Priorité aux lignes invalides 
+    if (!all_allow_ways_valid) begin
+      alt_repl_way = inv_way;
+    end else begin
+      // 2) Chercher une ligne appartenant à la même enclave
+      for (int i = 0; i < CVA6Cfg.DCACHE_SET_ASSOC; i++) begin
+        if (way_allow_mask[i]) begin
+          if (rd_enclave_id_tag[i] == enclave_id_i) begin
+            found_our_line = 1'b1;
+            our_line_index = i[$clog2(CVA6Cfg.DCACHE_SET_ASSOC)-1:0];
+          break;
+          end
+        end
+      end
+      if (found_our_line) begin
+        alt_repl_way = our_line_index;
+      end else begin
+        // 3) Chercher une ligne non-sécurisée (secure flag == 0)
+        for (int j = 0; j < CVA6Cfg.DCACHE_SET_ASSOC; j++) begin
+          if (way_allow_mask[j]) begin
+            if (cur_vld_bits[j] && (rd_secure_flag[j] == 1'b0)) begin
+              found_nonsc_line = 1'b1;
+              nonsc_line_index = j[$clog2(CVA6Cfg.DCACHE_SET_ASSOC)-1:0];
+              break;
+            end
+          end
+        end
+      end
+      if (found_nonsc_line) begin
+          alt_repl_way = nonsc_line_index;
+      end else begin
+          alt_repl_way = rnd_way_allowed; // fallback safe si rien trouvé
+      end
+    end
+  end
+
+  //assign repl_way             = (all_ways_valid) ? rnd_way : inv_way;
+  assign repl_way = (countermeasure_active_i && enclave_id_i != 4'b0000) ?
+                    alt_repl_way :
+                    ((all_allow_ways_valid) ? rnd_way : inv_way);
+  
+  //Fin Oussama
 
   assign mshr_d.size          = (mshr_allocate) ? miss_size_i[miss_port_idx] : mshr_q.size;
   assign mshr_d.paddr         = (mshr_allocate) ? miss_paddr_i[miss_port_idx] : mshr_q.paddr;

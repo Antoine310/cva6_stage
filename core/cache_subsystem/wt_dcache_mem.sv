@@ -73,7 +73,12 @@ module wt_dcache_mem
     input logic [(CVA6Cfg.XLEN/8)-1:0] wr_data_be_i,
 
     // forwarded wbuffer
-    input wbuffer_t [CVA6Cfg.WtDcacheWbufDepth-1:0] wbuffer_data_i
+    input wbuffer_t [CVA6Cfg.WtDcacheWbufDepth-1:0] wbuffer_data_i,
+    //Oussama
+    input logic [3:0] enclave_id_i,
+    input logic countermeasure_active_i,
+    output logic [3:0] rd_enclave_id_tag_o [CVA6Cfg.DCACHE_SET_ASSOC-1:0],
+    output logic [CVA6Cfg.DCACHE_SET_ASSOC-1:0] rd_secure_flag_o
 );
 
   localparam DCACHE_NUM_BANKS = CVA6Cfg.DCACHE_LINE_WIDTH / CVA6Cfg.XLEN;
@@ -325,16 +330,27 @@ module wt_dcache_mem
         .rdata_o(bank_rdata[k])
     );
   end
-
   for (genvar i = 0; i < CVA6Cfg.DCACHE_SET_ASSOC; i++) begin : gen_tag_srams
+    
+    //Oussama
+    logic [CVA6Cfg.DCACHE_TAG_WIDTH+5:0] tagline;
 
-    assign tag_rdata[i]     = vld_tag_rdata[i][CVA6Cfg.DCACHE_TAG_WIDTH-1:0];
-    assign rd_vld_bits_o[i] = vld_tag_rdata[i][CVA6Cfg.DCACHE_TAG_WIDTH];
+    assign rd_vld_bits_o[i]    = vld_tag_rdata[i][CVA6Cfg.DCACHE_TAG_WIDTH+5];
+    assign secure_flag_o[i]    = vld_tag_rdata[i][CVA6Cfg.DCACHE_TAG_WIDTH+4];
+    assign enclave_id_tag[i]   = vld_tag_rdata[i][CVA6Cfg.DCACHE_TAG_WIDTH+3:CVA6Cfg.DCACHE_TAG_WIDTH];
+    assign tag_rdata[i]        = vld_tag_rdata[i][CVA6Cfg.DCACHE_TAG_WIDTH-1:0];
+    
+    assign rd_secure_flag_o[i]    = secure_flag_o[i];
+    assign rd_enclave_id_tag_o[i] = enclave_id_tag[i];
+    
+    assign tagline = {vld_wdata[i], countermeasure_active_i, enclave_id_i, wr_cl_tag_i};
+
+
 
     // Tag RAM
     sram_cache #(
-        // tag + valid bit
-        .DATA_WIDTH (CVA6Cfg.DCACHE_TAG_WIDTH + 1),
+        // tag + valid bit + Oussama (5)
+        .DATA_WIDTH (CVA6Cfg.DCACHE_TAG_WIDTH + 6),
         .BYTE_ACCESS(0),
         .TECHNO_CUT (CVA6Cfg.TechnoCut),
         .NUM_WORDS  (CVA6Cfg.DCACHE_NUM_WORDS)
@@ -345,7 +361,8 @@ module wt_dcache_mem
         .we_i   (vld_we),
         .addr_i (vld_addr),
         .wuser_i('0),
-        .wdata_i({vld_wdata[i], wr_cl_tag_i}),
+        //.wdata_i({vld_wdata[i], wr_cl_tag_i}),
+        .wdata_i(tagline), //Oussama
         .be_i   ('1),
         .ruser_o(),
         .rdata_o(vld_tag_rdata[i])

@@ -57,7 +57,10 @@ module perf_counters
     input  logic [NumPorts-1:0][CVA6Cfg.DCACHE_SET_ASSOC-1:0]miss_vld_bits_i,  //For Cache eviction (3ports-LOAD,STORE,PTW)
     input logic i_tlb_flush_i,
     input logic stall_issue_i,  //stall-read operands
-    input logic [31:0] mcountinhibit_i
+    input logic [31:0] mcountinhibit_i,
+    // Oussama
+    output logic countermeasure_active_o,
+    output logic [3:0] enclave_id_o
 );
 
   typedef logic [11:0] csr_addr_t;
@@ -200,6 +203,25 @@ module perf_counters
       end else if( (addr_i >= csr_addr_t'(riscv::CSR_MHPM_EVENT_3)) && (addr_i < csr_addr_t'(riscv::CSR_MHPM_EVENT_3) + MHPMCounterNum) ) begin
         mhpmevent_d[addr_i-riscv::CSR_MHPM_EVENT_3+1] = data_i;
       end
+      //Oussama
+      //activation of the countermeasure
+      if (addr_i == csr_addr_t'(riscv::CSR_MHPM_EVENT_3) && data_i[23]) begin
+        countermeasure_active_d = data_i[23];
+        $display("Active le flag");
+      end else if (addr_i == csr_addr_t'(riscv::CSR_MHPM_EVENT_3) && !data_i[23]) begin
+        countermeasure_active_d = 1'b0;
+        $display("Desac le flag");
+      end 
+
+      //Enclave ID
+      if (addr_i == csr_addr_t'(riscv::CSR_MHPM_EVENT_4) && (data_i[23] || data_i[24] || data_i[25] || data_i[26])) begin
+        enclave_id_o = data_i[26:23];
+        $display("Active enclave ");
+      end else if (addr_i == csr_addr_t'(riscv::CSR_MHPM_EVENT_4) && (!data_i[23] && !data_i[24] && !data_i[25] || !data_i[26])) begin
+        enclave_id_o = 4'b0000;
+        $display("Desac enclave ");
+      end
+      // End 
     end
   end
 

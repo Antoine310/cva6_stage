@@ -53,7 +53,10 @@ module wt_dcache
     output logic         mem_data_req_o,
     input  logic         mem_data_ack_i,
     output dcache_req_t  mem_data_o,
-    output logic hit_cache_o
+    output logic hit_cache_o,
+    //Oussama
+    input logic[3:0] enclave_id_i,
+    input logic      countermeasure_active_i
 );
 
   localparam DCACHE_CL_IDX_WIDTH = $clog2(CVA6Cfg.DCACHE_NUM_WORDS);
@@ -128,7 +131,9 @@ module wt_dcache
   //Protect 
   logic     [                      NumPorts-1:0]                                  hit_port;
  assign hit_cache_o = |rd_hit_oh && req_ports_o[1].data_rvalid;
-
+  //Oussama
+  logic [3:0] rd_enclave_id_tag [CVA6Cfg.DCACHE_SET_ASSOC-1:0];
+  logic [CVA6Cfg.DCACHE_SET_ASSOC-1:0] rd_secure_flag;
   ///////////////////////////////////////////////////////
   // miss handling unit
   ///////////////////////////////////////////////////////
@@ -185,7 +190,12 @@ module wt_dcache
       .mem_rtrn_i     (mem_rtrn_i),
       .mem_data_req_o (mem_data_req_o),
       .mem_data_ack_i (mem_data_ack_i),
-      .mem_data_o     (mem_data_o)
+      .mem_data_o     (mem_data_o),
+      //Oussama
+      .enclave_id_i   (enclave_id_i),
+      .countermeasure_active_i   (countermeasure_active_i),
+      .rd_enclave_id_tag (rd_enclave_id_tag),
+      .rd_secure_flag    (rd_secure_flag)
   );
 
   ///////////////////////////////////////////////////////
@@ -365,7 +375,12 @@ module wt_dcache
       .wr_user_i      (wr_user),
       .wr_data_be_i   (wr_data_be),
       // write buffer forwarding
-      .wbuffer_data_i (wbuffer_data)
+      .wbuffer_data_i (wbuffer_data),
+      //Oussama
+      .enclave_id_i (enclave_id_i),
+      .countermeasure_active_i (countermeasure_active_i),
+      .rd_enclave_id_tag_o     (rd_enclave_id_tag),
+      .rd_secure_flag_o        (rd_secure_flag)
   );
 
   ///////////////////////////////////////////////////////
