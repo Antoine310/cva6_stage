@@ -83,6 +83,9 @@ module perf_counters
   logic [CVA6Cfg.NrCommitPorts-1:0] return_event;
   logic [CVA6Cfg.NrCommitPorts-1:0] int_event;
   logic [CVA6Cfg.NrCommitPorts-1:0] fp_event;
+  
+  logic countermeasure_active_q;
+  logic countermeasure_active_d;
 
   //Multiplexer
   always_comb begin : Mux
