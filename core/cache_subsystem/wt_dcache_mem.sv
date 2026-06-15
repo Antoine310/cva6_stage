@@ -310,8 +310,9 @@ module wt_dcache_mem
   ///////////////////////////////////////////////////////
   // memory arrays and regs
   ///////////////////////////////////////////////////////
+  logic [CVA6Cfg.DCACHE_TAG_WIDTH+5:0] vld_tag_rdata [CVA6Cfg.DCACHE_SET_ASSOC-1:0];
 
-  logic [CVA6Cfg.DCACHE_TAG_WIDTH:0] vld_tag_rdata[CVA6Cfg.DCACHE_SET_ASSOC-1:0];
+  //logic [CVA6Cfg.DCACHE_TAG_WIDTH:0] vld_tag_rdata[CVA6Cfg.DCACHE_SET_ASSOC-1:0];
 
   for (genvar k = 0; k < DCACHE_NUM_BANKS; k++) begin : gen_data_banks
     // Data RAM
