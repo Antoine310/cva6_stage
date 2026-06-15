@@ -205,7 +205,6 @@ void measure_prime_probe(void *address, size_t *histogram, size_t number_of_meas
 
     size_t probe = measure_access_time(address); 
 
-    
     victim_evict[i]= (e1-e0);
 
     check_evinc_victime = check_evinc_victime + (e1-e0);
@@ -284,7 +283,18 @@ int main(int argc, char *argv[]) {
 
   memset(address, 1, 4096);
   memset(buffer, 2, sizeof(buffer));
-  
+
+  for(int k=1;k<=10;k++) {
+
+    prime_probe(address); 
+
+    uint64_t e0 = read_csr(CSR_HPMCOUNTER7);
+    victime(address);
+    uint64_t e1 = read_csr(CSR_HPMCOUNTER7);
+
+    printf("i=%lu, e = %lu \n",k,(e1-e0));
+
+  }
   measure_prime_ref(address, hit_histogram, MEASUREMENTS);
   measure_prime_probe(address, miss_histogram, MEASUREMENTS);
 
