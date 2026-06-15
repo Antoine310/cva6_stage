@@ -133,8 +133,9 @@ module wt_dcache
   //Protect 
   logic     [                      NumPorts-1:0]                                  hit_port;
   
-  assign hit_cache_o = |rd_hit_oh && req_ports_o[1].data_rvalid && countermeasure_active_i ; 
-    //Oussama
+  assign hit_cache_o = |rd_hit_oh && req_ports_o[1].data_rvalid; 
+  
+  //Oussama
   logic [3:0] rd_enclave_id_tag [CVA6Cfg.DCACHE_SET_ASSOC-1:0];
   logic [CVA6Cfg.DCACHE_SET_ASSOC-1:0] rd_secure_flag;
   logic [NumPorts-1:0] miss_force_nc;
