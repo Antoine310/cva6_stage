@@ -84,6 +84,11 @@ module wt_dcache_mem
   localparam DCACHE_NUM_BANKS = CVA6Cfg.DCACHE_LINE_WIDTH / CVA6Cfg.XLEN;
   localparam DCACHE_NUM_BANKS_WIDTH = $clog2(DCACHE_NUM_BANKS);
 
+  // Oussama
+  logic [3:0] enclave_id_tag [CVA6Cfg.DCACHE_SET_ASSOC-1:0];
+  logic [CVA6Cfg.DCACHE_SET_ASSOC-1:0] secure_flag_o;
+  // Fin Oussama
+
   // functions
   function automatic logic [DCACHE_NUM_BANKS-1:0] dcache_cl_bin2oh(
       input logic [DCACHE_NUM_BANKS_WIDTH-1:0] in);

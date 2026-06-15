@@ -224,16 +224,20 @@ module perf_counters
       // End 
     end
   end
-
   //Registers
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       generic_counter_q <= '{default: 0};
       mhpmevent_q       <= '{default: 0};
+      countermeasure_active_q <= 1'b0;
     end else begin
       generic_counter_q <= generic_counter_d;
       mhpmevent_q       <= mhpmevent_d;
+      countermeasure_active_q <= countermeasure_active_d; 
     end
   end
+
+  assign countermeasure_active_o = countermeasure_active_q; 
+
 
 endmodule
