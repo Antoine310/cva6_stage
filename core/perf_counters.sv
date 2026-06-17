@@ -58,9 +58,10 @@ module perf_counters
     input logic i_tlb_flush_i,
     input logic stall_issue_i,  //stall-read operands
     input logic [31:0] mcountinhibit_i,
-    // Oussama
+    //Oussama
     output logic countermeasure_active_o,
     output logic [3:0] enclave_id_o
+    //Fin Oussama
 );
 
   typedef logic [11:0] csr_addr_t;
@@ -83,9 +84,6 @@ module perf_counters
   logic [CVA6Cfg.NrCommitPorts-1:0] return_event;
   logic [CVA6Cfg.NrCommitPorts-1:0] int_event;
   logic [CVA6Cfg.NrCommitPorts-1:0] fp_event;
-  
-  logic countermeasure_active_q;
-  logic countermeasure_active_d;
 
   //Multiplexer
   always_comb begin : Mux
@@ -209,38 +207,30 @@ module perf_counters
       //Oussama
       //activation of the countermeasure
       if (addr_i == csr_addr_t'(riscv::CSR_MHPM_EVENT_3) && data_i[23]) begin
-        countermeasure_active_d = data_i[23];
-        $display("Active le flag");
+      countermeasure_active_o = data_i[23];
       end else if (addr_i == csr_addr_t'(riscv::CSR_MHPM_EVENT_3) && !data_i[23]) begin
-        countermeasure_active_d = 1'b0;
-        $display("Desac le flag");
+      countermeasure_active_o = data_i[23];
       end 
 
       //Enclave ID
       if (addr_i == csr_addr_t'(riscv::CSR_MHPM_EVENT_4) && (data_i[23] || data_i[24] || data_i[25] || data_i[26])) begin
-        enclave_id_o = data_i[26:23];
-        $display("Active enclave ");
+      enclave_id_o = data_i[26:23];
       end else if (addr_i == csr_addr_t'(riscv::CSR_MHPM_EVENT_4) && (!data_i[23] && !data_i[24] && !data_i[25] || !data_i[26])) begin
-        enclave_id_o = 4'b0000;
-        $display("Desac enclave ");
+      enclave_id_o = data_i[26:23]; 
       end
-      // End 
+
     end
   end
+
   //Registers
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       generic_counter_q <= '{default: 0};
       mhpmevent_q       <= '{default: 0};
-      countermeasure_active_q <= 1'b0;
     end else begin
       generic_counter_q <= generic_counter_d;
       mhpmevent_q       <= mhpmevent_d;
-      countermeasure_active_q <= countermeasure_active_d; 
     end
   end
-
-  assign countermeasure_active_o = countermeasure_active_q; 
-
 
 endmodule
