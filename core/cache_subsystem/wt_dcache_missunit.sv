@@ -317,22 +317,29 @@ module wt_dcache_missunit
   
   int nb_cycle;
 
-  always @(posedge clk_i) begin
-    if (mshr_allocate) begin
-      $display(
-        "[cycle %0d] MISS_ALLOC addr=%h repl_way=%0d inv_way=%0d rnd_way=%0d",
-        nb_cycle,
-        miss_paddr_i[miss_port_idx],
-        repl_way,
-        inv_way,
-        rnd_way
-      );
-    end
-    
-    nb_cycle <= nb_cycle + 1;
+always @(posedge clk_i) begin
+if (mshr_allocate &&
+   ((miss_paddr_i[miss_port_idx][11:4] == 8'd0) ||
+    (miss_paddr_i[miss_port_idx][11:4] == 8'd41))) begin
+$display(
+  "[cycle %0d] MISS_ALLOC addr=%h set=%0d repl=%0d rnd=%0d mshr_vld=%0b mshr_paddr=%h rdrd=%0b rdwr=%0b tx=%0b",
+  nb_cycle,
+  miss_paddr_i[miss_port_idx],
+  miss_paddr_i[miss_port_idx][11:4],
+  repl_way,
+  rnd_way,
+  mshr_vld_q,
+  mshr_q.paddr,
+  mshr_rdrd_collision[miss_port_idx],
+  mshr_rdwr_collision,
+  tx_rdwr_collision
+);
 
   end
-  
+
+  nb_cycle <= nb_cycle + 1;
+end
+
   //Fin Oussama
   
   assign mshr_d.size          = (mshr_allocate) ? miss_size_i[miss_port_idx] : mshr_q.size;
