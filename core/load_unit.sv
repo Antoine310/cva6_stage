@@ -126,6 +126,10 @@ module load_unit
   ldbuf_id_t ldbuf_rindex;
   ldbuf_id_t ldbuf_last_id_q;
 
+  logic [63:0] load_cycle [CVA6Cfg.NrLoadBufEntries-1:0];
+  logic [63:0] latence_load;
+
+  
   assign ldbuf_full = &ldbuf_valid_q;
 
   //
@@ -167,6 +171,30 @@ module load_unit
       ldbuf_flushed_d[ldbuf_windex] = 1'b0;
       ldbuf_valid_d[ldbuf_windex]   = 1'b1;
     end
+  end
+
+  int nb_cycle; 
+
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+  if (!rst_ni) begin
+      latence_load    <= '0;
+      load_cycle      <= '0;
+      nb_cycle        <= '0;
+  end else begin 
+
+      if (ldbuf_w) begin 
+          load_cycle[ldbuf_windex] <= nb_cycle;
+      end
+      if (ldbuf_r) begin 
+          latence_load <= nb_cycle - load_cycle[ldbuf_rindex];
+        $display(
+            "[LOAD_LAT] id=%0d latency=%0d",
+            ldbuf_rindex,
+            nb_cycle - load_cycle[ldbuf_rindex]
+          );
+      end
+      nb_cycle <= nb_cycle + 1 ; 
+    end 
   end
 
   always_ff @(posedge clk_i or negedge rst_ni) begin : ldbuf_ff
