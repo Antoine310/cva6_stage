@@ -230,7 +230,11 @@ module ex_stage
     // Information dedicated to RVFI - RVFI
     output [CVA6Cfg.PLEN-1:0] rvfi_mem_paddr_o,
     // Lecture csr timewarp
-    output logic lecture_csr_o
+    output logic lecture_csr_o,
+    // latence load
+    output logic [63:0] latence_load_o,
+    //Retour d'un load
+    output logic nouvelle_valeur_o
 );
 
   // -------------------------
@@ -594,7 +598,9 @@ module ex_stage
       .pmpcfg_i,
       .pmpaddr_i,
       .rvfi_lsu_ctrl_o,
-      .rvfi_mem_paddr_o
+      .rvfi_mem_paddr_o,
+      .latence_load_o,
+      .nouvelle_valeur_o
   );
 
   if (CVA6Cfg.CvxifEn) begin : gen_cvxif

@@ -573,7 +573,8 @@ module cva6
   logic csr_commit_time;
   logic lecture_csr;
   logic [31:0] time_charge;
-
+  logic [63:0]latence_load;
+  logic nouvelle_valeur;
   // ----------------------------
   // Performance Counters <-> *
   // ----------------------------
@@ -1031,7 +1032,9 @@ module cva6
       //RVFI
       .rvfi_lsu_ctrl_o         (rvfi_lsu_ctrl),
       .rvfi_mem_paddr_o        (rvfi_mem_paddr),
-      .lecture_csr_o            (lecture_csr)
+      .lecture_csr_o           (lecture_csr),
+      .latence_load_o          (latence_load),
+      .nouvelle_valeur_o        (nouvelle_valeur)
   );
 
   // ---------
@@ -1189,7 +1192,9 @@ module cva6
         .load_commit_i      (load_commit_timewarp),
         .load_invalid_i     (load_invalid_timewarp),
         .lecture_csr_i      (lecture_csr),
-        .charge_o           (time_charge)
+        .charge_o           (time_charge),
+        .latence_load_i     (latence_load),
+        .nouvelle_valeur_i  (nouvelle_valeur)
     );
   // ------------------------
   // Performance Counters

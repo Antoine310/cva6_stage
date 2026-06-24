@@ -78,7 +78,11 @@ module load_unit
     // Data cache request in - CACHES
     output dcache_req_i_t req_port_o,
     // Presence of non-idempotent operations in the D$ write buffer - CACHES
-    input logic dcache_wbuffer_not_ni_i
+    input logic dcache_wbuffer_not_ni_i,
+    // Protect - latence calculer 
+    output logic [63:0] latence_load_o,
+    //Retour d'un load
+    output logic nouvelle_valeur_o
 );
   enum logic [3:0] {
     IDLE,
@@ -127,7 +131,6 @@ module load_unit
   ldbuf_id_t ldbuf_last_id_q;
 
   logic [63:0] load_cycle [CVA6Cfg.NrLoadBufEntries-1:0];
-  logic [63:0] latence_load;
 
   
   assign ldbuf_full = &ldbuf_valid_q;
@@ -173,23 +176,28 @@ module load_unit
     end
   end
 
-  int nb_cycle; 
+  logic [63:0] nb_cycle;
+  integer i;
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
   if (!rst_ni) begin
-      latence_load    <= '0;
-      load_cycle      <= '0;
+      latence_load_o    <= '0;
       nb_cycle        <= '0;
+      for (i = 0; i < CVA6Cfg.NrLoadBufEntries; i++) begin
+        load_cycle[i] <= '0;
+      end
   end else begin 
-
+      nouvelle_valeur_o <= 0;
+      
       if (ldbuf_w) begin 
           load_cycle[ldbuf_windex] <= nb_cycle;
       end
       if (ldbuf_r) begin 
-          latence_load <= nb_cycle - load_cycle[ldbuf_rindex];
+          latence_load_o <= nb_cycle - load_cycle[ldbuf_rindex];
+          nouvelle_valeur_o <= 1'b1;
         $display(
-            "[LOAD_LAT] id=%0d latency=%0d",
-            ldbuf_rindex,
+            "[LOAD_LAT] [cycle %0d ] id=%0d latency=%0d",
+            nb_cycle,ldbuf_rindex,
             nb_cycle - load_cycle[ldbuf_rindex]
           );
       end
