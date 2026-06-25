@@ -22,7 +22,10 @@ module timewarp
     parameter type dcache_req_o_t = logic,
     parameter int LECTURE_TIME = 5000,    // Delais Lecture présent, HIT_TIME > 0 
     parameter int CHARGE_TIME = 5000, // temps ajouter au compteur de la charge 
-    parameter int MAX_HIT = 20000
+    parameter int MAX_HIT = 20000,
+    parameter int TAILLETAB = 16
+
+
 ) (
     // Subsystem Clock - SUBSYSTEM
     input logic clk_i,
@@ -43,7 +46,9 @@ module timewarp
     //latence load retour
     input logic [63:0] latence_load_i,
     //Retour d'un load
-    input logic nouvelle_valeur_i
+    input logic nouvelle_valeur_i,
+    //miss dcache
+    input logic dcache_miss_i
 );
     logic [$clog2(LECTURE_TIME+1)-1:0] compteur_lecture;
     logic [31:0] compteur_coherence_temps;
@@ -163,8 +168,58 @@ module timewarp
             
     end
 
+    logic [63:0] tab_hit [TAILLETAB-1:0]; 
+    logic [63:0] tab_miss [TAILLETAB-1:0]; 
+    logic [$clog2(TAILLETAB)-1:0] miss_idx;
+    logic [$clog2(TAILLETAB)-1:0] hit_idx;
+    logic [4:0] wait_hit_q;
+    logic [4:0] wait_miss_q;
+    logic [4:0] next_hit_q;
+    logic [4:0] next_miss_q;
 
-    
+    always_comb begin
+
+        next_hit_q  = wait_hit_q  + 5'(dcache_hit_i);
+        next_miss_q = wait_miss_q + 5'(dcache_miss_i);
+
+        if (nouvelle_valeur_i) begin
+            if (next_miss_q > 0)
+                next_miss_q = next_miss_q - 1'b1;
+            else if (next_hit_q > 0)
+                next_hit_q = next_hit_q - 1'b1;
+        end
+    end
+
+    always_ff @(posedge clk_i or negedge rst_ni) begin
+        if (~rst_ni) begin
+            miss_idx <= '0;
+            hit_idx <= '0;
+            wait_hit_q  <= '0;
+            wait_miss_q <= '0;
+            for (int i = 0; i < TAILLETAB; i++) begin
+                tab_hit[i]  <= '0;
+                tab_miss[i] <= '0;
+            end 
+        end else begin 
+
+            wait_hit_q  <= next_hit_q;
+            wait_miss_q <= next_miss_q;
+
+            if (nouvelle_valeur_i) begin
+                if ((wait_hit_q>0) && (wait_miss_q>0))
+                    $display("[cycle %0d] Bug probleme 1 :d", nb_cycle);
+                if ((wait_miss_q>0)) begin
+                    tab_miss[miss_idx] <= latence_load_i;
+                    miss_idx <= miss_idx + 1'b1;
+                end else if ((wait_hit_q>0)) begin
+                    tab_hit[hit_idx] <= latence_load_i;
+                    hit_idx <= hit_idx + 1'b1;
+                end else begin
+                    $display("[cycle %0d] Bug probleme 2 :d", nb_cycle);
+                end 
+            end 
+        end
+    end
     logic hit_en_q;
     logic csr_cycle_q;
     logic [4:0] dcache_hit_c;    
@@ -174,6 +229,7 @@ module timewarp
     logic [31:0] nombre_hit_q;
     logic hit_enable_q;
     logic dcache_hit_i_q;
+    logic dcache_miss_i_q;
     always_ff @(posedge clk_i or negedge rst_ni) begin
         if (!rst_ni) begin
             hit_en_q      <= 1'b0;
@@ -188,7 +244,13 @@ module timewarp
 
             if (dcache_hit_i_q != dcache_hit_i)
                 $display("[cycle %0d] dcache_hit_i -> %0d", nb_cycle, dcache_hit_i);
-            
+            if (dcache_miss_i != dcache_miss_i_q)
+                $display("[cycle %0d] dcache_miss_i -> %0d", nb_cycle, dcache_miss_i);
+            if (csr_cycle_q != csr_lecture_cycle)
+                $display("[cycle %0d] csr_lecture_cycle -> %0d", nb_cycle, csr_lecture_cycle);
+            if (dcache_miss_i_q && dcache_hit_i)
+                $display("[cycle %0d] Hmmm probleme", nb_cycle);
+
             dcache_hit_i_q <= dcache_hit_i; 
             hit_enable_q <= hit_enable; 
             hit_en_q <= hit_en;
@@ -198,7 +260,7 @@ module timewarp
             csr_lecture_q <= csr_lecture;
             lecture_csr_i_q <= lecture_csr_i;
             nombre_hit_q <= nombre_hit; 
-
+            dcache_miss_i_q <= dcache_miss_i;
         end
     end
 endmodule 

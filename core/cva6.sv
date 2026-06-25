@@ -1194,7 +1194,8 @@ module cva6
         .lecture_csr_i      (lecture_csr),
         .charge_o           (time_charge),
         .latence_load_i     (latence_load),
-        .nouvelle_valeur_i  (nouvelle_valeur)
+        .nouvelle_valeur_i  (nouvelle_valeur),
+        .dcache_miss_i      (dcache_miss_cache_perf)
     );
   // ------------------------
   // Performance Counters
