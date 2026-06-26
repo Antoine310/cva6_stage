@@ -337,7 +337,21 @@ module timewarp
                 $display("[cycle %0d] wait_hit_q -> %0d", nb_cycle, wait_hit_q);
             if (wait_miss_q_b != wait_miss_q)
                 $display("[cycle %0d] wait_miss_q -> %0d", nb_cycle, wait_miss_q);
-                
+            
+            if (charge_o != charge_q)
+                $display("[cycle %0d] charge_o -> %0d", nb_cycle, charge_o);
+
+            if (charge_d != charge_q)
+                $display("[cycle %0d] charge_q=%0d charge_d=%0d charge_o=%0d",
+                        nb_cycle, charge_q, charge_d, charge_o);
+
+            if (nombre_hit_q != nombre_hit )
+                $display("[cycle %0d] nombre_hit -> %0d", nb_cycle, nombre_hit);
+            
+            if (hit_enable_q != hit_enable )
+                $display("[cycle %0d] hit_enable -> %0d", nb_cycle, hit_enable);
+
+
             wait_hit_q_b <= wait_hit_q;
             wait_miss_q_b <= wait_miss_q;
             dcache_hit_i_q <= dcache_hit_i; 
