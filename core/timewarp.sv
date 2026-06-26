@@ -64,11 +64,13 @@ module timewarp
     logic hit_enable;
     logic deblocage_lecture;
 
+    logic [63:0] delta_MissHit;
+
     always_comb begin : charge
         charge_d = charge_q; // On recupere la charge en cours 
         // Si lecture csr et hit, on crée une offuscation en rajoutant une charge +10 qu'on envoie au csr_regfile.
         if (csr_lecture && nombre_hit > 0 ) begin 
-            charge_d = (nombre_hit << 1);        
+            charge_d = nombre_hit * delta_MissHit ;        
         end else if (reset_charge) begin 
             charge_d = '0;
         end
@@ -174,21 +176,23 @@ module timewarp
     logic [$clog2(TAILLETAB)-1:0] hit_idx;
     logic [4:0] wait_hit_q;
     logic [4:0] wait_miss_q;
-    logic [4:0] next_hit_q;
-    logic [4:0] next_miss_q;
+    logic [63:0] cumul_hit;
+    logic [63:0] cumul_miss;
+    logic [63:0] moyenne_hit;
+    logic [63:0] moyenne_miss;
+    logic [$clog2(TAILLETAB+1)-1:0] nb_hit;
+    logic [$clog2(TAILLETAB+1)-1:0] nb_miss;
 
-    always_comb begin
 
-        next_hit_q  = wait_hit_q  + 5'(dcache_hit_i);
-        next_miss_q = wait_miss_q + 5'(dcache_miss_i);
+    always_comb begin : moyenne
 
-        if (nouvelle_valeur_i) begin
-            if (next_miss_q > 0)
-                next_miss_q = next_miss_q - 1'b1;
-            else if (next_hit_q > 0)
-                next_hit_q = next_hit_q - 1'b1;
-        end
+        moyenne_hit  = (nb_hit  != 0) ? (cumul_hit  / 64'(nb_hit))  : '0;
+        moyenne_miss = (nb_miss != 0) ? (cumul_miss / 64'(nb_miss)) : '0;
+
+        delta_MissHit = (nb_hit != 0 && nb_miss != 0 && moyenne_miss > moyenne_hit) ? moyenne_miss - moyenne_hit : 5;    
+        //(nb_hit >= TAILLETAB && nb_miss >= TAILLETAB)
     end
+
 
     always_ff @(posedge clk_i or negedge rst_ni) begin
         if (~rst_ni) begin
@@ -196,28 +200,105 @@ module timewarp
             hit_idx <= '0;
             wait_hit_q  <= '0;
             wait_miss_q <= '0;
+            cumul_hit <= '0;
+            cumul_miss <= '0; 
+            nb_hit  <= '0;
+            nb_miss <= '0;
             for (int i = 0; i < TAILLETAB; i++) begin
                 tab_hit[i]  <= '0;
                 tab_miss[i] <= '0;
             end 
         end else begin 
 
-            wait_hit_q  <= next_hit_q;
-            wait_miss_q <= next_miss_q;
-
             if (nouvelle_valeur_i) begin
-                if ((wait_hit_q>0) && (wait_miss_q>0))
+                /*
+                if ((wait_hit_q>0) && (wait_miss_q>0)) begin 
                     $display("[cycle %0d] Bug probleme 1 :d", nb_cycle);
+                    wait_hit_q  <= '0;
+                    wait_miss_q <= '0;
+                end else */ 
                 if ((wait_miss_q>0)) begin
+                    if (nombre_hit>0) begin 
+                    $display("\n==============================");
+                    $display("[cycle %0d] UPDATE TABLEAUX", nb_cycle);
+
+                    $display("MISS : ");
+                    for (int i = 0; i < TAILLETAB; i++) begin
+                        $display("%0d ", tab_miss[i]);
+                    end
+                    $display("");
+
+                    $display("nb_hit      = %0d", nb_hit);
+                    $display("nb_miss     = %0d", nb_miss);
+
+                    $display("cumul_hit   = %0d", cumul_hit);
+                    $display("cumul_miss  = %0d", cumul_miss);
+
+                    $display("moyenne_hit = %0d", moyenne_hit);
+                    $display("moyenne_miss= %0d", moyenne_miss);
+
+                    $display("delta       = %0d", delta_MissHit);
+                    $display("==============================\n");
+                    end 
+                    cumul_miss <= cumul_miss + latence_load_i - tab_miss[miss_idx]; 
+
                     tab_miss[miss_idx] <= latence_load_i;
+                    if (nb_miss <  5'(TAILLETAB)) begin 
+                        nb_miss <= nb_miss + 1'b1;
+                    end
                     miss_idx <= miss_idx + 1'b1;
+                    if (dcache_miss_i<1) begin
+                        wait_miss_q <= wait_miss_q - 1; 
+                    end 
+                    
+                    wait_hit_q  <= wait_hit_q  + 5'(dcache_hit_i);
+
                 end else if ((wait_hit_q>0)) begin
+                    if (nombre_hit>0) begin 
+
+                    $display("\n==============================");
+                    $display("[cycle %0d] UPDATE TABLEAUX", nb_cycle);
+
+                    $display("HIT  : ");
+                    for (int i = 0; i < TAILLETAB; i++) begin
+                        $display("%0d ", tab_hit[i]);
+                    end
+                    $display("");
+
+                    $display("nb_hit      = %0d", nb_hit);
+                    $display("nb_miss     = %0d", nb_miss);
+
+                    $display("cumul_hit   = %0d", cumul_hit);
+                    $display("cumul_miss  = %0d", cumul_miss);
+
+                    $display("moyenne_hit = %0d", moyenne_hit);
+                    $display("moyenne_miss= %0d", moyenne_miss);
+
+                    $display("delta       = %0d", delta_MissHit);
+                    $display("==============================\n");
+                    end 
+                    cumul_hit <= cumul_hit + latence_load_i - tab_hit[hit_idx]; 
+
                     tab_hit[hit_idx] <= latence_load_i;
+                    if (nb_hit <  5'(TAILLETAB)) begin 
+                        nb_hit <= nb_hit + 1'b1;
+                    end
                     hit_idx <= hit_idx + 1'b1;
+                    if (dcache_hit_i<1) begin
+                        wait_hit_q <= wait_hit_q - 1; 
+                    end 
+                    
+                    wait_miss_q <= wait_miss_q + 5'(dcache_miss_i);
+
                 end else begin
-                    $display("[cycle %0d] Bug probleme 2 :d", nb_cycle);
+                    //$display("[cycle %0d] Bug probleme 2 :d", nb_cycle);
+                    wait_hit_q  <= wait_hit_q  + 5'(dcache_hit_i);
+                    wait_miss_q <= wait_miss_q + 5'(dcache_miss_i);
                 end 
-            end 
+            end else begin
+                wait_hit_q  <= wait_hit_q  + 5'(dcache_hit_i);
+                wait_miss_q <= wait_miss_q + 5'(dcache_miss_i);
+            end
         end
     end
     logic hit_en_q;
@@ -230,6 +311,8 @@ module timewarp
     logic hit_enable_q;
     logic dcache_hit_i_q;
     logic dcache_miss_i_q;
+    logic [4:0] wait_hit_q_b;
+    logic [4:0] wait_miss_q_b;
     always_ff @(posedge clk_i or negedge rst_ni) begin
         if (!rst_ni) begin
             hit_en_q      <= 1'b0;
@@ -250,7 +333,13 @@ module timewarp
                 $display("[cycle %0d] csr_lecture_cycle -> %0d", nb_cycle, csr_lecture_cycle);
             if (dcache_miss_i_q && dcache_hit_i)
                 $display("[cycle %0d] Hmmm probleme", nb_cycle);
-
+            if (wait_hit_q_b != wait_hit_q)
+                $display("[cycle %0d] wait_hit_q -> %0d", nb_cycle, wait_hit_q);
+            if (wait_miss_q_b != wait_miss_q)
+                $display("[cycle %0d] wait_miss_q -> %0d", nb_cycle, wait_miss_q);
+                
+            wait_hit_q_b <= wait_hit_q;
+            wait_miss_q_b <= wait_miss_q;
             dcache_hit_i_q <= dcache_hit_i; 
             hit_enable_q <= hit_enable; 
             hit_en_q <= hit_en;

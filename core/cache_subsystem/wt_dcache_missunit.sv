@@ -737,5 +737,40 @@ module wt_dcache_missunit
   end
 `endif
   //pragma translate_on
+  /* 
+  int nb_cycle;
 
+always_ff @(posedge clk_i) begin
+
+  $display(
+    "[cycle %0d] replay=%0b mshr_vld=%0b collision=%0b load_ack=%0b",
+    nb_cycle,
+    miss_replay_o[miss_port_idx],
+    mshr_vld_q,
+    mshr_rdrd_collision[miss_port_idx],
+    load_ack
+);
+  if (load_ack) begin
+    $display(
+      "[cycle %0d] LOAD_ACK paddr=%h id=%0d port=%0d nc=%0b size=%0d repl_way=%0d",
+      nb_cycle,
+      mshr_q.paddr,
+      mshr_q.id,
+      mshr_q.miss_port_idx,
+      mshr_q.nc,
+      mshr_q.size,
+      mshr_q.repl_way
+    );
+  end
+    if (miss_o) begin
+    $display(
+      "[cycle %0d] MISS addr=%h set=%0d tag=%h",
+      nb_cycle,
+      miss_paddr_i[miss_port_idx],
+      miss_paddr_i[miss_port_idx][11:4],   // index du set (sur CVA6 WT)
+      miss_paddr_i[miss_port_idx][CVA6Cfg.PLEN-1:12] // tag
+    );
+  end
+  nb_cycle <= nb_cycle + 1 ;
+end*/
 endmodule  // wt_dcache_missunit
