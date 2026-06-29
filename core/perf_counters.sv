@@ -60,7 +60,9 @@ module perf_counters
     input logic [31:0] mcountinhibit_i,
     //Oussama
     output logic countermeasure_active_o,
-    output logic [3:0] enclave_id_o
+    output logic [3:0] enclave_id_o,
+    
+    input logic [63:0] delta_timewarp 
     //Fin Oussama
 );
 
@@ -136,6 +138,7 @@ module perf_counters
         5'b10100: events[i] = |int_event;  //Integer instructions
         5'b10101: events[i] = |fp_event;  //Floating Point Instructions
         5'b10110: events[i] = stall_issue_i;  //Pipeline bubbles
+        5'b11100: events[i] = 1'b1;  // timewarp
         default: events[i] = 0;
       endcase
     end
@@ -150,13 +153,18 @@ module perf_counters
     update_access_exception = 1'b0;
 
     // Increment the non-inhibited counters with active events
-    for (int unsigned i = 1; i <= 6; i++) begin
-      if ((!debug_mode_i) && (!we_i)) begin
-        if ((events[i]) == 1 && (!mcountinhibit_i[i+2])) begin
-          generic_counter_d[i] = generic_counter_q[i] + 1'b1;
-        end
+  for (int unsigned i = 1; i <= 6; i++) begin
+    if ((!debug_mode_i) && (!we_i)) begin
+
+      if (mhpmevent_q[i] == 5'b11100) begin
+        generic_counter_d[i] = delta_timewarp;
       end
+      else if (events[i] && (!mcountinhibit_i[i+2])) begin
+        generic_counter_d[i] = generic_counter_q[i] + 1'b1;
+      end
+
     end
+  end
 
     //Read
     if( (addr_i >= csr_addr_t'(riscv::CSR_MHPM_COUNTER_3)) && (addr_i < ( csr_addr_t'(riscv::CSR_MHPM_COUNTER_3) + MHPMCounterNum)) ) begin

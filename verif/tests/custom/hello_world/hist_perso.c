@@ -38,6 +38,10 @@ static inline void set_evinc_counter(void)
 {
     csr_write(CSR_MHPMEVENT7, 18);
 }
+static inline void set_delta_counter(void)
+{
+    csr_write(CSR_MHPMEVENT5, 28);
+}
 static inline void set_enclave_id(uint8_t id)
 {
     uint32_t v = ((uint32_t)(id & 0xF)) << 23;
@@ -200,6 +204,9 @@ uint64_t probe_miss[MEASUREMENTS];
 uint64_t cumul_refTab [MEASUREMENTS];
 uint64_t cumul_primeTab [MEASUREMENTS];
 
+uint64_t delta_ref [MEASUREMENTS];
+uint64_t delta_prime [MEASUREMENTS];
+
 void measure_prime_ref(void *address, size_t *histogram, size_t number_of_measurements) {
 
   for (size_t i = 0; i < number_of_measurements; i++) {
@@ -211,6 +218,8 @@ void measure_prime_ref(void *address, size_t *histogram, size_t number_of_measur
     size_t prime = measure_access_time(address); 
 
     uint64_t m1 = read_csr(CSR_HPMCOUNTER6);
+
+    delta_ref[i] = read_csr(CSR_HPMCOUNTER5);
 
     check_miss_ref = check_miss_ref + (m1-m0); 
     ref_miss[i] = m1-m0;
@@ -242,6 +251,8 @@ void measure_prime_probe(void *address, size_t *histogram, size_t number_of_meas
 
     uint64_t m2 = read_csr(CSR_HPMCOUNTER6);
     
+    delta_prime[i] = read_csr(CSR_HPMCOUNTER5);
+
     victim_miss[i] = (m1-m0); 
     victim_evict[i]= (e1-e0);
     probe_miss[i] =(e2-e1) ;
@@ -317,7 +328,7 @@ int main(int argc, char *argv[]) {
 
   set_miss_counter();
   set_evinc_counter();
-
+  set_delta_counter();
   set_enclave_id(0);
   
   printf("START\n");
@@ -381,6 +392,12 @@ int main(int argc, char *argv[]) {
             (unsigned long)cumul_refTab[i],
             (unsigned long)cumul_primeTab[i],
             (unsigned long)probe_miss[i]);
+        printf("Delta i : %lu , delta_ref = %lu , delta_prime = %lu\n",
+            (unsigned long)i,
+            (unsigned long)delta_ref[i],
+            (unsigned long)delta_prime[i]);
+
+
   } 
   /*
   for (size_t i = 0; i < HISTOGRAM_ENTRIES; i += HISTOGRAM_SCALE) {

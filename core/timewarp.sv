@@ -23,7 +23,7 @@ module timewarp
     parameter int LECTURE_TIME = 5000,    // Delais Lecture présent, HIT_TIME > 0 
     parameter int CHARGE_TIME = 5000, // temps ajouter au compteur de la charge 
     parameter int MAX_HIT = 20000,
-    parameter int TAILLETAB = 16
+    parameter int TAILLETAB = 64
 
 
 ) (
@@ -48,7 +48,10 @@ module timewarp
     //Retour d'un load
     input logic nouvelle_valeur_i,
     //miss dcache
-    input logic dcache_miss_i
+    input logic dcache_miss_i,  
+
+    output logic [63:0] delta_MissHit_o
+
 );
     logic [$clog2(LECTURE_TIME+1)-1:0] compteur_lecture;
     logic [63:0] compteur_coherence_temps;
@@ -79,7 +82,7 @@ module timewarp
     int nb_cycle;
 
     assign charge_o = charge_d ; // Sortie de la charge en cours. 
-
+    assign delta_MissHit_o = delta_MissHit;
     always_ff @(posedge clk_i or negedge rst_ni) begin
         if (~rst_ni) begin
             hit_en <= 1'b0;
@@ -243,7 +246,7 @@ module timewarp
                     cumul_miss <= cumul_miss + latence_load_i - tab_miss[miss_idx]; 
 
                     tab_miss[miss_idx] <= latence_load_i;
-                    if (nb_miss <  5'(TAILLETAB)) begin 
+                    if (nb_miss <  TAILLETAB) begin 
                         nb_miss <= nb_miss + 1'b1;
                     end
                     miss_idx <= miss_idx + 1'b1;
@@ -281,7 +284,7 @@ module timewarp
                     cumul_hit <= cumul_hit + latence_load_i - tab_hit[hit_idx]; 
 
                     tab_hit[hit_idx] <= latence_load_i;
-                    if (nb_hit <  5'(TAILLETAB)) begin 
+                    if (nb_hit <  TAILLETAB) begin 
                         nb_hit <= nb_hit + 1'b1;
                     end
                     hit_idx <= hit_idx + 1'b1;

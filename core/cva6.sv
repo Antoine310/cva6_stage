@@ -573,6 +573,8 @@ module cva6
   logic csr_commit_time;
   logic lecture_csr;
   logic [63:0] time_charge;
+  logic [63:0] delta_perf;
+
   logic [63:0]latence_load;
   logic nouvelle_valeur;
   // ----------------------------
@@ -1195,7 +1197,8 @@ module cva6
         .charge_o           (time_charge),
         .latence_load_i     (latence_load),
         .nouvelle_valeur_i  (nouvelle_valeur),
-        .dcache_miss_i      (dcache_miss_cache_perf)
+        .dcache_miss_i      (dcache_miss_cache_perf),
+        .delta_MissHit_o    (delta_perf)
     );
   // ------------------------
   // Performance Counters
@@ -1241,7 +1244,8 @@ module cva6
         .mcountinhibit_i    (mcountinhibit_csr_perf),
         //Oussama
         .countermeasure_active_o(countermeasure_active),
-        .enclave_id_o(enclave_id)
+        .enclave_id_o(enclave_id),
+        .delta_timewarp    (delta_perf)
     );
   end : gen_perf_counter
   else begin : gen_no_perf_counter
