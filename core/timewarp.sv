@@ -95,7 +95,7 @@ module timewarp
         end else begin 
 
             if(nouvelle_valeur_i) begin
-                $display( "[cycle %0d ] [Latence timewarp] =%0d ",nb_cycle,latence_load_i);
+                //$display( "[cycle %0d ] [Latence timewarp] =%0d ",nb_cycle,latence_load_i);
             end 
             if (csr_lecture_cycle)begin
                 hit_enable <= 1'b1;
@@ -141,7 +141,7 @@ module timewarp
             // A partir du commit de la lecture csr, on demarre le timer pendant au minimum de charge cycle + une valeur possible, 
             //si on fait moins on pourrait avoir une incoherence du temps
             if (cumul_charge>0 && deblocage_lecture) begin 
-                compteur_coherence_temps <=  32'(CHARGE_TIME) +  charge_d;
+                compteur_coherence_temps <=  64'(CHARGE_TIME) +  charge_d;
                 compteur_lecture <= '0;
                 /*$display("[cycle %0d] START coherence_timer hits=%0d charge=%0d total=%0d",
                     nb_cycle,
@@ -149,7 +149,7 @@ module timewarp
                     charge_d,
                      32'(CHARGE_TIME) + charge_d);*/
             end else if (deblocage_lecture && compteur_coherence_temps > 0) begin // Lecture donc relance du timer si timer déja lancer et commit csr sans hit load 
-                compteur_coherence_temps <=  32'(CHARGE_TIME) + charge_d;
+                compteur_coherence_temps <=  64'(CHARGE_TIME) + charge_d;
                 compteur_lecture <= '0;
                 //$display("[cycle %0d] Relance la charge timer ! charge_q=%0d charge_d=%0d ", nb_cycle, charge_q , charge_d) ;
             end else if (compteur_coherence_temps !=  0) begin
@@ -237,6 +237,7 @@ module timewarp
 
                     $display("delta       = %0d", delta_MissHit);
                     $display("cumul_charge       = %0d", cumul_charge);
+                    $display("miss_idx       = %0d", miss_idx);
                     $display("==============================\n");
                     end 
                     cumul_miss <= cumul_miss + latence_load_i - tab_miss[miss_idx]; 
@@ -274,6 +275,7 @@ module timewarp
 
                     $display("delta       = %0d", delta_MissHit);
                     $display("cumul_charge       = %0d", cumul_charge);
+                    $display("hit_idx       = %0d", hit_idx);
                     $display("==============================\n");
                     end 
                     cumul_hit <= cumul_hit + latence_load_i - tab_hit[hit_idx]; 
