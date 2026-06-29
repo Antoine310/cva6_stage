@@ -42,7 +42,7 @@ module timewarp
     // Ex_stage lecture csr 
     input logic lecture_csr_i,
     // Charge cycle csr_regfile
-    output logic [31:0] charge_o,
+    output logic [63:0] charge_o,
     //latence load retour
     input logic [63:0] latence_load_i,
     //Retour d'un load
@@ -51,26 +51,26 @@ module timewarp
     input logic dcache_miss_i
 );
     logic [$clog2(LECTURE_TIME+1)-1:0] compteur_lecture;
-    logic [31:0] compteur_coherence_temps;
+    logic [63:0] compteur_coherence_temps;
 
     logic hit_en ;
     logic [4:0] dcache_hit_q;
 
-    logic [31:0] charge_q, charge_d;    
+    logic [63:0] charge_q, charge_d;    
     logic reset_charge;
     logic csr_lecture;
 
-    logic [31:0] nombre_hit; 
     logic hit_enable;
     logic deblocage_lecture;
 
     logic [63:0] delta_MissHit;
+    logic [63:0] cumul_charge;
 
     always_comb begin : charge
         charge_d = charge_q; // On recupere la charge en cours 
         // Si lecture csr et hit, on crée une offuscation en rajoutant une charge +10 qu'on envoie au csr_regfile.
-        if (csr_lecture && nombre_hit > 0 ) begin 
-            charge_d = nombre_hit * delta_MissHit ;        
+        if (csr_lecture && cumul_charge > 0 ) begin 
+            charge_d = cumul_charge ;       
         end else if (reset_charge) begin 
             charge_d = '0;
         end
@@ -89,9 +89,9 @@ module timewarp
             charge_q  <= '0;
             reset_charge <= 1'b0;
             csr_lecture <= 1'b0;
-            nombre_hit <= '0;
             hit_enable <= 1'b0;
             deblocage_lecture <= 1'b0;  
+            cumul_charge  <= '0;
         end else begin 
 
             if(nouvelle_valeur_i) begin
@@ -103,9 +103,7 @@ module timewarp
             end 
 
             if ((dcache_hit_q>0) && load_commit_i && hit_enable ) begin
-                if (nombre_hit < 32'(MAX_HIT)) begin
-                    nombre_hit <= nombre_hit + 1'b1;
-                end
+                cumul_charge <= cumul_charge + delta_MissHit ; 
             end  
             dcache_hit_q <= dcache_hit_q + 5'(dcache_hit_i) - 5'((dcache_hit_q>0) && load_commit_i) - 5'((dcache_hit_q>0) && load_invalid_i);
             // Sauvegarde de la charge en cours
@@ -131,7 +129,7 @@ module timewarp
             end else if (compteur_lecture != 0) begin
                 compteur_lecture <= compteur_lecture - 1 ; 
                 if (compteur_lecture == 1) begin
-                    nombre_hit <= '0;
+                    cumul_charge <= '0;
                     hit_enable <= 1'b0; 
                     hit_en <= 1'b0; 
                     //$display("[cycle %0d] END compteur_lecture timer ",
@@ -142,7 +140,7 @@ module timewarp
             reset_charge <= 1'b0;
             // A partir du commit de la lecture csr, on demarre le timer pendant au minimum de charge cycle + une valeur possible, 
             //si on fait moins on pourrait avoir une incoherence du temps
-            if (nombre_hit>0 && deblocage_lecture) begin 
+            if (cumul_charge>0 && deblocage_lecture) begin 
                 compteur_coherence_temps <=  32'(CHARGE_TIME) +  charge_d;
                 compteur_lecture <= '0;
                 /*$display("[cycle %0d] START coherence_timer hits=%0d charge=%0d total=%0d",
@@ -158,7 +156,7 @@ module timewarp
                 compteur_coherence_temps <= compteur_coherence_temps - 1 ; 
                 if (compteur_coherence_temps == 1) begin
                     reset_charge <= 1'b1; 
-                    nombre_hit <= '0;
+                    cumul_charge <= '0;
                     hit_enable <= 1'b0; 
                     hit_en <= 1'b0; 
                     //$display("[cycle %0d] END coherence_timer",
@@ -218,7 +216,7 @@ module timewarp
                     wait_miss_q <= '0;
                 end else */ 
                 if ((wait_miss_q>0)) begin
-                    if (nombre_hit>0) begin 
+                    if (cumul_charge>0) begin 
                     $display("\n==============================");
                     $display("[cycle %0d] UPDATE TABLEAUX", nb_cycle);
 
@@ -238,6 +236,7 @@ module timewarp
                     $display("moyenne_miss= %0d", moyenne_miss);
 
                     $display("delta       = %0d", delta_MissHit);
+                    $display("cumul_charge       = %0d", cumul_charge);
                     $display("==============================\n");
                     end 
                     cumul_miss <= cumul_miss + latence_load_i - tab_miss[miss_idx]; 
@@ -254,8 +253,7 @@ module timewarp
                     wait_hit_q  <= wait_hit_q  + 5'(dcache_hit_i);
 
                 end else if ((wait_hit_q>0)) begin
-                    if (nombre_hit>0) begin 
-
+                    if (cumul_charge>0) begin 
                     $display("\n==============================");
                     $display("[cycle %0d] UPDATE TABLEAUX", nb_cycle);
 
@@ -275,6 +273,7 @@ module timewarp
                     $display("moyenne_miss= %0d", moyenne_miss);
 
                     $display("delta       = %0d", delta_MissHit);
+                    $display("cumul_charge       = %0d", cumul_charge);
                     $display("==============================\n");
                     end 
                     cumul_hit <= cumul_hit + latence_load_i - tab_hit[hit_idx]; 
@@ -307,7 +306,7 @@ module timewarp
     logic load_commit_q;
     logic lecture_csr_i_q;
     logic csr_lecture_q;
-    logic [31:0] nombre_hit_q;
+    logic [63:0] cumul_charge_q;
     logic hit_enable_q;
     logic dcache_hit_i_q;
     logic dcache_miss_i_q;
@@ -320,11 +319,10 @@ module timewarp
             csr_cycle_q   <= 1'b0;
             csr_lecture_q <= 1'b0;
             lecture_csr_i_q <= 1'b0;
-            nombre_hit_q <= '0;
+            cumul_charge_q <= '0;
             hit_enable_q <= 1'b0;
             dcache_hit_i_q <=  1'b0;
         end else begin
-
             if (dcache_hit_i_q != dcache_hit_i)
                 $display("[cycle %0d] dcache_hit_i -> %0d", nb_cycle, dcache_hit_i);
             if (dcache_miss_i != dcache_miss_i_q)
@@ -345,13 +343,13 @@ module timewarp
                 $display("[cycle %0d] charge_q=%0d charge_d=%0d charge_o=%0d",
                         nb_cycle, charge_q, charge_d, charge_o);
 
-            if (nombre_hit_q != nombre_hit )
-                $display("[cycle %0d] nombre_hit -> %0d", nb_cycle, nombre_hit);
+            if (cumul_charge_q != cumul_charge )
+                $display("[cycle %0d]  cumul_charge -> %0d", nb_cycle, cumul_charge);
             
             if (hit_enable_q != hit_enable )
                 $display("[cycle %0d] hit_enable -> %0d", nb_cycle, hit_enable);
 
-
+            
             wait_hit_q_b <= wait_hit_q;
             wait_miss_q_b <= wait_miss_q;
             dcache_hit_i_q <= dcache_hit_i; 
@@ -362,7 +360,7 @@ module timewarp
             load_commit_q <= load_commit_i;
             csr_lecture_q <= csr_lecture;
             lecture_csr_i_q <= lecture_csr_i;
-            nombre_hit_q <= nombre_hit; 
+            cumul_charge_q <= cumul_charge; 
             dcache_miss_i_q <= dcache_miss_i;
         end
     end
