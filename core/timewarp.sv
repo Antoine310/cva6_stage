@@ -23,7 +23,7 @@ module timewarp
     parameter int LECTURE_TIME = 5000,    // Delais Lecture présent, HIT_TIME > 0 
     parameter int CHARGE_TIME = 5000, // temps ajouter au compteur de la charge 
     parameter int MAX_HIT = 20000,
-    parameter int TAILLETAB = 16
+    parameter int TAILLETAB = 128
 
 
 ) (
@@ -70,7 +70,7 @@ module timewarp
         charge_d = charge_q; // On recupere la charge en cours 
         // Si lecture csr et hit, on crée une offuscation en rajoutant une charge +10 qu'on envoie au csr_regfile.
         if (csr_lecture && cumul_charge > 0 ) begin 
-            charge_d = cumul_charge ;       
+            charge_d = cumul_charge;       
         end else if (reset_charge) begin 
             charge_d = '0;
         end
@@ -187,7 +187,7 @@ module timewarp
         moyenne_hit  = (nb_hit  != 0) ? (cumul_hit  / 64'(nb_hit))  : '0;
         moyenne_miss = (nb_miss != 0) ? (cumul_miss / 64'(nb_miss)) : '0;
 
-        delta_MissHit = (nb_hit != 0 && nb_miss != 0 && moyenne_miss > moyenne_hit) ? moyenne_miss - moyenne_hit : 5;    
+        delta_MissHit = (nb_hit != 0 && nb_miss != 0 && moyenne_miss > moyenne_hit) ? moyenne_miss - moyenne_hit : 4;    
         //(nb_hit >= TAILLETAB && nb_miss >= TAILLETAB)
     end
 
@@ -243,7 +243,7 @@ module timewarp
                     cumul_miss <= cumul_miss + latence_load_i - tab_miss[miss_idx]; 
 
                     tab_miss[miss_idx] <= latence_load_i;
-                    if (nb_miss <  5'(TAILLETAB)) begin 
+                    if (nb_miss <  TAILLETAB) begin 
                         nb_miss <= nb_miss + 1'b1;
                     end
                     miss_idx <= miss_idx + 1'b1;
@@ -281,7 +281,7 @@ module timewarp
                     cumul_hit <= cumul_hit + latence_load_i - tab_hit[hit_idx]; 
 
                     tab_hit[hit_idx] <= latence_load_i;
-                    if (nb_hit <  5'(TAILLETAB)) begin 
+                    if (nb_hit <  TAILLETAB) begin 
                         nb_hit <= nb_hit + 1'b1;
                     end
                     hit_idx <= hit_idx + 1'b1;
