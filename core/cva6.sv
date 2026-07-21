@@ -575,8 +575,8 @@ module cva6
   logic [63:0] time_charge;
   logic [63:0] delta_perf;
 
-  logic [63:0]latence_load;
-  logic nouvelle_valeur;
+  logic [1:0][CVA6Cfg.TRANS_ID_BITS-1:0] trans_id_load_b;
+  logic [1:0] nouvelle_valeur;
   // ----------------------------
   // Performance Counters <-> *
   // ----------------------------
@@ -1035,7 +1035,7 @@ module cva6
       .rvfi_lsu_ctrl_o         (rvfi_lsu_ctrl),
       .rvfi_mem_paddr_o        (rvfi_mem_paddr),
       .lecture_csr_o           (lecture_csr),
-      .latence_load_o          (latence_load),
+      .trans_id_load_o          (trans_id_load_b),
       .nouvelle_valeur_o        (nouvelle_valeur)
   );
 
@@ -1195,10 +1195,11 @@ module cva6
         .load_invalid_i     (load_invalid_timewarp),
         .lecture_csr_i      (lecture_csr),
         .charge_o           (time_charge),
-        .latence_load_i     (latence_load),
+        .trans_id_load      (trans_id_load_b),
         .nouvelle_valeur_i  (nouvelle_valeur),
         .dcache_miss_i      (dcache_miss_cache_perf),
-        .delta_MissHit_o    (delta_perf)
+        .delta_MissHit_o    (delta_perf),
+        .commit_id_i        (lsu_commit_trans_id)
     );
   // ------------------------
   // Performance Counters

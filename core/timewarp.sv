@@ -44,14 +44,15 @@ module timewarp
     // Charge cycle csr_regfile
     output logic [63:0] charge_o,
     //latence load retour
-    input logic [63:0] latence_load_i,
+    input logic [1:0][CVA6Cfg.TRANS_ID_BITS-1:0] trans_id_load ,
     //Retour d'un load
-    input logic nouvelle_valeur_i,
+    input logic [1:0] nouvelle_valeur_i,
     //miss dcache
     input logic dcache_miss_i,  
 
-    output logic [63:0] delta_MissHit_o
+    output logic [63:0] delta_MissHit_o,
 
+    input logic [CVA6Cfg.TRANS_ID_BITS-1:0] commit_id_i
 );
     logic [$clog2(LECTURE_TIME+1)-1:0] compteur_lecture;
     logic [63:0] compteur_coherence_temps;
@@ -183,6 +184,9 @@ module timewarp
     logic [63:0] moyenne_miss;
     logic [$clog2(TAILLETAB+1)-1:0] nb_hit;
     logic [$clog2(TAILLETAB+1)-1:0] nb_miss;
+
+    logic        is_miss     [CVA6Cfg.TRANS_ID_BITS-1:0];
+    logic [15:0] start_cycle [CVA6Cfg.TRANS_ID_BITS-1:0];
 
 
     always_comb begin : moyenne

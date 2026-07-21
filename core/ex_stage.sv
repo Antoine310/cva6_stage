@@ -231,10 +231,10 @@ module ex_stage
     output [CVA6Cfg.PLEN-1:0] rvfi_mem_paddr_o,
     // Lecture csr timewarp
     output logic lecture_csr_o,
-    // latence load
-    output logic [63:0] latence_load_o,
+    // id load
+    output logic [1:0] [CVA6Cfg.TRANS_ID_BITS-1:0] trans_id_load_o,
     //Retour d'un load
-    output logic nouvelle_valeur_o
+    output logic [1:0] nouvelle_valeur_o
 );
 
   // -------------------------
@@ -599,7 +599,7 @@ module ex_stage
       .pmpaddr_i,
       .rvfi_lsu_ctrl_o,
       .rvfi_mem_paddr_o,
-      .latence_load_o,
+      .trans_id_load_o,
       .nouvelle_valeur_o
   );
 

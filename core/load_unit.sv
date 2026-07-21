@@ -79,10 +79,10 @@ module load_unit
     output dcache_req_i_t req_port_o,
     // Presence of non-idempotent operations in the D$ write buffer - CACHES
     input logic dcache_wbuffer_not_ni_i,
-    // Protect - latence calculer 
-    output logic [63:0] latence_load_o,
+    // Trans id load 
+    output logic [1:0][CVA6Cfg.TRANS_ID_BITS-1:0] trans_id_load_o,
     //Retour d'un load
-    output logic nouvelle_valeur_o
+    output logic [1:0] nouvelle_valeur_o
 );
   enum logic [3:0] {
     IDLE,

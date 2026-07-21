@@ -156,9 +156,10 @@ module load_store_unit
     output lsu_ctrl_t                    rvfi_lsu_ctrl_o,
     // RVFI information - RVFI
     output            [CVA6Cfg.PLEN-1:0] rvfi_mem_paddr_o,
-    output logic [63:0] latence_load_o,
+    // iD load
+    output logic [1:0][CVA6Cfg.TRANS_ID_BITS-1:0] trans_id_load_o,
     //Retour d'un load
-    output logic nouvelle_valeur_o
+    output logic [1:0] nouvelle_valeur_o
 );
 
   // data is misaligned
@@ -446,7 +447,7 @@ module load_store_unit
       .req_port_i           (dcache_req_ports_i[1]),
       .req_port_o           (dcache_req_ports_o[1]),
       .dcache_wbuffer_not_ni_i,
-      .latence_load_o,
+      .trans_id_load_o,
       .nouvelle_valeur_o
   );
 
