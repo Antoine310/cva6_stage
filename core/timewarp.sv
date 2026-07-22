@@ -172,22 +172,32 @@ module timewarp
             
     end
 
-    logic [63:0] tab_hit [TAILLETAB-1:0]; 
-    logic [63:0] tab_miss [TAILLETAB-1:0]; 
-    logic [$clog2(TAILLETAB)-1:0] miss_idx;
+
+
+
+    localparam int unsigned NR_TRANS_IDS = 2**CVA6Cfg.TRANS_ID_BITS;
+
+    logic [63:0] start_cycle [NR_TRANS_IDS-1:0];
+    logic        trans_valid [NR_TRANS_IDS-1:0];
+    logic        type_valid  [NR_TRANS_IDS-1:0];
+    logic        is_miss     [NR_TRANS_IDS-1:0];
+
+    logic [63:0] latency_commit;
+
+    logic [63:0] tab_hit  [TAILLETAB-1:0];
+    logic [63:0] tab_miss [TAILLETAB-1:0];
+
     logic [$clog2(TAILLETAB)-1:0] hit_idx;
+    logic [$clog2(TAILLETAB)-1:0] miss_idx;
+
     logic [4:0] wait_hit_q;
     logic [4:0] wait_miss_q;
+
     logic [63:0] cumul_hit;
     logic [63:0] cumul_miss;
-    logic [63:0] moyenne_hit;
-    logic [63:0] moyenne_miss;
+
     logic [$clog2(TAILLETAB+1)-1:0] nb_hit;
     logic [$clog2(TAILLETAB+1)-1:0] nb_miss;
-
-    logic        is_miss     [CVA6Cfg.TRANS_ID_BITS-1:0];
-    logic [15:0] start_cycle [CVA6Cfg.TRANS_ID_BITS-1:0];
-
 
     always_comb begin : moyenne
 
@@ -196,8 +206,201 @@ module timewarp
 
         delta_MissHit = (nb_hit != 0 && nb_miss != 0 && moyenne_miss > moyenne_hit) ? moyenne_miss - moyenne_hit : 5;    
         //(nb_hit >= TAILLETAB && nb_miss >= TAILLETAB)
-    end
+        end
+    always_ff @(posedge clk_i or negedge rst_ni) begin : statistics_ff
+        if (!rst_ni) begin
+            hit_idx     <= '0;
+            miss_idx    <= '0;
 
+            wait_hit_q  <= '0;
+            wait_miss_q <= '0;
+
+            cumul_hit   <= '0;
+            cumul_miss  <= '0;
+
+            nb_hit      <= '0;
+            nb_miss     <= '0;
+
+            for (int i = 0; i < TAILLETAB; i++) begin
+                tab_hit[i]  <= '0;
+                tab_miss[i] <= '0;
+            end
+
+            for (int i = 0; i < NR_TRANS_IDS; i++) begin
+                start_cycle[i] <= '0;
+                trans_valid[i] <= 1'b0;
+                type_valid[i]  <= 1'b0;
+                is_miss[i]     <= 1'b0;
+            end
+
+        end else begin
+            
+        
+            wait_hit_q  <= wait_hit_q  + 5'(dcache_hit_i);
+            wait_miss_q <= wait_miss_q + 5'(dcache_miss_i);
+
+
+            if (nouvelle_valeur_i[0]) begin
+                start_cycle[trans_id_load[0]] <= nb_cycle;
+                trans_valid[trans_id_load[0]] <= 1'b1;
+                type_valid[trans_id_load[0]]  <= 1'b0;
+
+                $display(
+                    "[cycle %0d] START load trans_id=%0d",
+                    nb_cycle,
+                    trans_id_load[0]
+                );
+            end
+
+            if (nouvelle_valeur_i[1]) begin
+                if ((wait_miss_q > 0) || dcache_miss_i) begin
+                    is_miss[trans_id_load[1]]    <= 1'b1;
+                    type_valid[trans_id_load[1]] <= 1'b1;
+
+
+                    wait_miss_q <= wait_miss_q + 5'(dcache_miss_i) - 5'd1;
+
+                    $display(
+                        "[cycle %0d] RETURN load trans_id=%0d -> MISS",
+                        nb_cycle,
+                        trans_id_load[1]
+                    );
+
+                end else if ((wait_hit_q > 0) || dcache_hit_i) begin
+
+                    is_miss[trans_id_load[1]]    <= 1'b0;
+                    type_valid[trans_id_load[1]] <= 1'b1;
+
+                    wait_hit_q <= wait_hit_q  + 5'(dcache_hit_i) - 5'd1;
+
+                    $display(
+                        "[cycle %0d] RETURN load trans_id=%0d -> HIT",
+                        nb_cycle,
+                        trans_id_load[1]
+                    );
+
+                end else begin
+
+                    $display(
+                        "[cycle %0d] WARNING: retour trans_id=%0d sans hit/miss",
+                        nb_cycle,
+                        trans_id_load[1]
+                    );
+                end
+            end
+            /*
+            * Commit valide d'un load.
+            */
+            if (load_commit_i && !load_invalid_i) begin
+                if (trans_valid[commit_id_i] && type_valid[commit_id_i]) begin
+                    /*
+                    * Arithmétique modulo 2^64 : reste correcte même si
+                    * nb_cycle déborde entre le départ et le commit.
+                    */
+                    latency_commit  <= nb_cycle - start_cycle[commit_id_i];
+
+                    if (is_miss[commit_id_i]) begin
+                        cumul_miss <=  cumul_miss + latency_commit - tab_miss[miss_idx];
+
+                        tab_miss[miss_idx] <= latency_commit;
+
+                        if (nb_miss < TAILLETAB)
+                            nb_miss <= nb_miss + 1'b1;
+
+                        miss_idx <= miss_idx + 1'b1;
+
+                        $display(
+                            "[cycle %0d] COMMIT trans_id=%0d MISS latency=%0d",
+                            nb_cycle,
+                            commit_id_i,
+                            latency_commit
+                        );
+                        if (cumul_charge>0) begin 
+                        $display("\n==============================");
+                        $display("[cycle %0d] UPDATE TABLEAUX", nb_cycle);
+
+                        $display("MISS : ");
+                        for (int i = 0; i < TAILLETAB; i++) begin
+                            $display("%0d ", tab_miss[i]);
+                        end
+                        $display("");
+
+                        $display("nb_hit      = %0d", nb_hit);
+                        $display("nb_miss     = %0d", nb_miss);
+
+                        $display("cumul_hit   = %0d", cumul_hit);
+                        $display("cumul_miss  = %0d", cumul_miss);
+
+                        $display("moyenne_hit = %0d", moyenne_hit);
+                        $display("moyenne_miss= %0d", moyenne_miss);
+
+                        $display("delta       = %0d", delta_MissHit);
+                        $display("cumul_charge       = %0d", cumul_charge);
+                        $display("miss_idx       = %0d", miss_idx);
+                        $display("==============================\n");
+                        end 
+                    end else begin
+                        cumul_hit <= cumul_hit + latency_commit - tab_hit[hit_idx];
+
+                        tab_hit[hit_idx] <= latency_commit;
+
+                        if (nb_hit < TAILLETAB)
+                            nb_hit <= nb_hit + 1'b1;
+
+          
+                        hit_idx <= hit_idx + 1'b1;
+
+                        $display(
+                            "[cycle %0d] COMMIT trans_id=%0d HIT latency=%0d",
+                            nb_cycle,
+                            commit_id_i,
+                            latency_commit
+                        );
+                        if (cumul_charge>0) begin 
+                            $display("\n==============================");
+                            $display("[cycle %0d] UPDATE TABLEAUX", nb_cycle);
+
+                            $display("HIT  : ");
+                            for (int i = 0; i < TAILLETAB; i++) begin
+                                $display("%0d ", tab_hit[i]);
+                            end
+                            $display("");
+
+                            $display("nb_hit      = %0d", nb_hit);
+                            $display("nb_miss     = %0d", nb_miss);
+
+                            $display("cumul_hit   = %0d", cumul_hit);
+                            $display("cumul_miss  = %0d", cumul_miss);
+
+                            $display("moyenne_hit = %0d", moyenne_hit);
+                            $display("moyenne_miss= %0d", moyenne_miss);
+
+                            $display("delta       = %0d", delta_MissHit);
+                            $display("cumul_charge       = %0d", cumul_charge);
+                            $display("hit_idx       = %0d", hit_idx);
+                            $display("==============================\n");
+                        end 
+                    end
+
+                    /*
+                    * La transaction est terminée : sa case peut être réutilisée.
+                    */
+                    trans_valid[commit_id_i] <= 1'b0;
+                    type_valid[commit_id_i]  <= 1'b0;
+
+                end else begin
+                    $display(
+                        "[cycle %0d] WARNING: commit load trans_id=%0d incomplet "
+                        "(start_valid=%0d type_valid=%0d)",
+                        nb_cycle,
+                        commit_id_i,
+                        trans_valid[commit_id_i],
+                        type_valid[commit_id_i]
+                    );
+                end
+            end
+        end
+    end
 
     always_ff @(posedge clk_i or negedge rst_ni) begin
         if (~rst_ni) begin

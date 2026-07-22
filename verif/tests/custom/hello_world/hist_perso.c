@@ -60,7 +60,7 @@ static inline void Init_cache (void *addr) // set le cache pour avoir la bonne m
     size_t other_set = 41;
 
     for (int k = 1; k <= PRIME_P ; k++) {
-        maccess(buffer + k * PRIME_STRIDE + (other_set << 4)); // Calcul adresse buffet + index dans buffer + bon set 
+        maccess(buffer + k * PRIME_STRIDE + (pset << 4)); // Calcul adresse buffet + index dans buffer + bon set 
     }
 
     asm volatile("fence");
@@ -73,7 +73,7 @@ static inline void Init_cache_prime (void *addr) // set le cache pour avoir la b
 
     for (int k = 0; k <= 8 ; k++) { 
     for (int k = 1; k <= PRIME_P ; k++) {
-        maccess(buffer + k * PRIME_STRIDE + (other_set << 4)); // Calcul adresse buffet + index dans buffer + bon set 
+        maccess(buffer + k * PRIME_STRIDE + (pset << 4)); // Calcul adresse buffet + index dans buffer + bon set 
         }
     }
     asm volatile("fence");
@@ -85,7 +85,7 @@ static inline void prime_probe(void *addr) // set le cache pour avoir la bonne m
     size_t other_set = 41;
 
     for (int k = 1; k <= PRIME_P ; k++) {
-        maccess(buffer + k * PRIME_STRIDE + (other_set << 4));
+        maccess(buffer + k * PRIME_STRIDE + (pset << 4));
     }
 
     asm volatile("fence");
@@ -96,8 +96,8 @@ static inline void victime(void *addr)
     size_t pset = (((size_t)addr) >> 4) & 0xFF; // Init le set pour le cache 
     size_t other_set = 41;
 
-    maccess(buffer + 17 * PRIME_STRIDE + (other_set << 4)); // Calcul adresse buffet + index dans buffer + bon set 
-    maccess(buffer + 18 * PRIME_STRIDE + (other_set << 4)); // Calcul adresse buffet + index dans buffer + bon set 
+    maccess(buffer + 17 * PRIME_STRIDE + (pset << 4)); // Calcul adresse buffet + index dans buffer + bon set 
+    maccess(buffer + 18 * PRIME_STRIDE + (pset << 4)); // Calcul adresse buffet + index dans buffer + bon set 
     
     asm volatile("fence");
 }

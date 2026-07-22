@@ -176,33 +176,26 @@ module load_unit
     end
   end
 
-  logic [63:0] nb_cycle;
-  integer i;
-
   always_ff @(posedge clk_i or negedge rst_ni) begin
-  if (!rst_ni) begin
-      latence_load_o    <= '0;
-      nb_cycle        <= '0;
-      for (i = 0; i < CVA6Cfg.NrLoadBufEntries; i++) begin
-        load_cycle[i] <= '0;
+    if (!rst_ni) begin
+      trans_id_load_o  <= '0;
+      nouvelle_valeur_o <= '0;
+    end else begin
+      // Les deux signaux sont des impulsions d'un cycle.
+      nouvelle_valeur_o <= '0;
+
+      // [0] : nouvelle requête load enregistrée.
+      if (ldbuf_w) begin
+        trans_id_load_o[0]   <= ldbuf_wdata.trans_id;
+        nouvelle_valeur_o[0] <= 1'b1;
       end
-  end else begin 
-      nouvelle_valeur_o <= 0;
-      
-      if (ldbuf_w) begin 
-          load_cycle[ldbuf_windex] <= nb_cycle;
+
+      // [1] : retour de la requête depuis le cache.
+      if (ldbuf_r) begin
+        trans_id_load_o[1]   <= ldbuf_q[ldbuf_rindex].trans_id;
+        nouvelle_valeur_o[1] <= 1'b1;
       end
-      if (ldbuf_r) begin 
-          latence_load_o <= nb_cycle - load_cycle[ldbuf_rindex];
-          nouvelle_valeur_o <= 1'b1;
-        $display(
-            "[LOAD_LAT] [cycle %0d ] id=%0d latency=%0d",
-            nb_cycle,ldbuf_rindex,
-            nb_cycle - load_cycle[ldbuf_rindex]
-          );
-      end
-      nb_cycle <= nb_cycle + 1 ; 
-    end 
+    end
   end
 
   always_ff @(posedge clk_i or negedge rst_ni) begin : ldbuf_ff
