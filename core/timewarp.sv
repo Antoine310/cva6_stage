@@ -196,6 +196,9 @@ module timewarp
     logic [63:0] cumul_hit;
     logic [63:0] cumul_miss;
 
+    logic [63:0] moyenne_hit;
+    logic [63:0] moyenne_miss;
+
     logic [$clog2(TAILLETAB+1)-1:0] nb_hit;
     logic [$clog2(TAILLETAB+1)-1:0] nb_miss;
 
@@ -390,8 +393,7 @@ module timewarp
 
                 end else begin
                     $display(
-                        "[cycle %0d] WARNING: commit load trans_id=%0d incomplet "
-                        "(start_valid=%0d type_valid=%0d)",
+                        "[cycle %0d] WARNING: commit load trans_id=%0d incomplet (start_valid=%0d type_valid=%0d)" ,
                         nb_cycle,
                         commit_id_i,
                         trans_valid[commit_id_i],
@@ -402,116 +404,6 @@ module timewarp
         end
     end
 
-    always_ff @(posedge clk_i or negedge rst_ni) begin
-        if (~rst_ni) begin
-            miss_idx <= '0;
-            hit_idx <= '0;
-            wait_hit_q  <= '0;
-            wait_miss_q <= '0;
-            cumul_hit <= '0;
-            cumul_miss <= '0; 
-            nb_hit  <= '0;
-            nb_miss <= '0;
-            for (int i = 0; i < TAILLETAB; i++) begin
-                tab_hit[i]  <= '0;
-                tab_miss[i] <= '0;
-            end 
-        end else begin 
-
-            if (nouvelle_valeur_i) begin
-                /*
-                if ((wait_hit_q>0) && (wait_miss_q>0)) begin 
-                    $display("[cycle %0d] Bug probleme 1 :d", nb_cycle);
-                    wait_hit_q  <= '0;
-                    wait_miss_q <= '0;
-                end else */ 
-                if ((wait_miss_q>0)) begin
-                    if (cumul_charge>0) begin 
-                    $display("\n==============================");
-                    $display("[cycle %0d] UPDATE TABLEAUX", nb_cycle);
-
-                    $display("MISS : ");
-                    for (int i = 0; i < TAILLETAB; i++) begin
-                        $display("%0d ", tab_miss[i]);
-                    end
-                    $display("");
-
-                    $display("nb_hit      = %0d", nb_hit);
-                    $display("nb_miss     = %0d", nb_miss);
-
-                    $display("cumul_hit   = %0d", cumul_hit);
-                    $display("cumul_miss  = %0d", cumul_miss);
-
-                    $display("moyenne_hit = %0d", moyenne_hit);
-                    $display("moyenne_miss= %0d", moyenne_miss);
-
-                    $display("delta       = %0d", delta_MissHit);
-                    $display("cumul_charge       = %0d", cumul_charge);
-                    $display("miss_idx       = %0d", miss_idx);
-                    $display("==============================\n");
-                    end 
-                    cumul_miss <= cumul_miss + latence_load_i - tab_miss[miss_idx]; 
-
-                    tab_miss[miss_idx] <= latence_load_i;
-                    if (nb_miss <  TAILLETAB) begin 
-                        nb_miss <= nb_miss + 1'b1;
-                    end
-                    miss_idx <= miss_idx + 1'b1;
-                    if (dcache_miss_i<1) begin
-                        wait_miss_q <= wait_miss_q - 1; 
-                    end 
-                    
-                    wait_hit_q  <= wait_hit_q  + 5'(dcache_hit_i);
-
-                end else if ((wait_hit_q>0)) begin
-                    if (cumul_charge>0) begin 
-                    $display("\n==============================");
-                    $display("[cycle %0d] UPDATE TABLEAUX", nb_cycle);
-
-                    $display("HIT  : ");
-                    for (int i = 0; i < TAILLETAB; i++) begin
-                        $display("%0d ", tab_hit[i]);
-                    end
-                    $display("");
-
-                    $display("nb_hit      = %0d", nb_hit);
-                    $display("nb_miss     = %0d", nb_miss);
-
-                    $display("cumul_hit   = %0d", cumul_hit);
-                    $display("cumul_miss  = %0d", cumul_miss);
-
-                    $display("moyenne_hit = %0d", moyenne_hit);
-                    $display("moyenne_miss= %0d", moyenne_miss);
-
-                    $display("delta       = %0d", delta_MissHit);
-                    $display("cumul_charge       = %0d", cumul_charge);
-                    $display("hit_idx       = %0d", hit_idx);
-                    $display("==============================\n");
-                    end 
-                    cumul_hit <= cumul_hit + latence_load_i - tab_hit[hit_idx]; 
-
-                    tab_hit[hit_idx] <= latence_load_i;
-                    if (nb_hit <  TAILLETAB) begin 
-                        nb_hit <= nb_hit + 1'b1;
-                    end
-                    hit_idx <= hit_idx + 1'b1;
-                    if (dcache_hit_i<1) begin
-                        wait_hit_q <= wait_hit_q - 1; 
-                    end 
-                    
-                    wait_miss_q <= wait_miss_q + 5'(dcache_miss_i);
-
-                end else begin
-                    //$display("[cycle %0d] Bug probleme 2 :d", nb_cycle);
-                    wait_hit_q  <= wait_hit_q  + 5'(dcache_hit_i);
-                    wait_miss_q <= wait_miss_q + 5'(dcache_miss_i);
-                end 
-            end else begin
-                wait_hit_q  <= wait_hit_q  + 5'(dcache_hit_i);
-                wait_miss_q <= wait_miss_q + 5'(dcache_miss_i);
-            end
-        end
-    end
     logic hit_en_q;
     logic csr_cycle_q;
     logic [4:0] dcache_hit_c;    
