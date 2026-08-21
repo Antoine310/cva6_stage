@@ -574,7 +574,10 @@ module cva6
   logic load_invalid_timewarp;
   logic csr_commit_time;
   logic lecture_csr;
+  logic load_new;
+  logic [CVA6Cfg.TRANS_ID_BITS-1:0] load_new_trans_id;
   logic [31:0] time_charge;
+  logic protect_en;
   logic hit_event;
 
   // ----------------------------
@@ -1034,7 +1037,9 @@ module cva6
       //RVFI
       .rvfi_lsu_ctrl_o         (rvfi_lsu_ctrl),
       .rvfi_mem_paddr_o        (rvfi_mem_paddr),
-      .lecture_csr_o            (lecture_csr)
+      .lecture_csr_o           (lecture_csr),
+      .load_new_o              (load_new),
+      .load_new_trans_id_o     (load_new_trans_id) 
   );
 
   // ---------
@@ -1085,7 +1090,8 @@ module cva6
       .hfence_vvma_o     (hfence_vvma_commit_controller),
       .hfence_gvma_o     (hfence_gvma_commit_controller),
       .load_commit_o     (load_commit_timewarp),
-      .load_invalid_o    (load_invalid_timewarp)
+      .load_invalid_o    (load_invalid_timewarp),
+      .protect_en_i      (protect_en)
   );
 
   assign commit_ack = commit_macro_ack & ~commit_drop_id_commit;
@@ -1193,7 +1199,11 @@ module cva6
         .load_invalid_i     (load_invalid_timewarp),
         .lecture_csr_i      (lecture_csr),
         .charge_o           (time_charge),
-        .hit_event_o        (hit_event)
+        .hit_event_o        (hit_event),
+        .load_new_i         (load_new),
+        .load_new_trans_id_i   (load_new_trans_id),
+        .commit_load_tran_id_i (lsu_commit_trans_id),
+        .protect_en_o           (protect_en)
     );
   // ------------------------
   // Performance Counters

@@ -91,7 +91,9 @@ module commit_stage
     // COMMIT LOAD 
     output logic load_commit_o,
     // COMMIT LOAD INVALID
-    output logic load_invalid_o
+    output logic load_invalid_o,
+    //stall
+    input logic protect_en_i 
 
 );
 
@@ -219,7 +221,7 @@ module commit_stage
           csr_op_o    = commit_instr_i[0].op;
           csr_wdata_o = commit_instr_i[0].result;
           if (!commit_drop_i[0]) begin
-            if (!csr_exception_i.valid) begin
+            if (!csr_exception_i.valid && !protect_en_i) begin
               commit_csr_o = 1'b1;
               wdata_o[0]   = csr_rdata_i;
             end else begin

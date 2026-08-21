@@ -22,7 +22,9 @@ module timewarp
     parameter type dcache_req_o_t = logic,
     parameter int LECTURE_TIME = 2000,    // Delais Lecture présent, HIT_TIME > 0 
     parameter int CHARGE_TIME = 2000, // temps ajouter au compteur de la charge 
-    parameter int MAX_HIT = 100000
+    parameter int MAX_HIT = 100000,
+    parameter int TEMPS_LOAD_HIT = 2
+
 ) (
     // Subsystem Clock - SUBSYSTEM
     input logic clk_i,
@@ -41,7 +43,15 @@ module timewarp
     // Charge cycle csr_regfile
     output logic [31:0] charge_o,
     // Info pour perfcounter
-    output logic hit_event_o
+    output logic hit_event_o,
+    // new load dans l'ex stage
+    input logic load_new_i,
+    // trans id new load
+    input logic [CVA6Cfg.TRANS_ID_BITS-1:0] load_new_trans_id_i,
+    // trans id commit 
+    input logic [CVA6Cfg.TRANS_ID_BITS-1:0] commit_load_tran_id_i,
+
+    output logic protect_en_o
 );
     logic [$clog2(LECTURE_TIME+1)-1:0] compteur_lecture;
     logic [31:0] compteur_coherence_temps;
@@ -53,22 +63,36 @@ module timewarp
     logic reset_charge;
     logic csr_lecture;
 
-    logic [31:0] nombre_hit; 
+    logic [31:0] cumul_charge; 
     logic hit_enable;
     logic deblocage_lecture;
-
+    logic stall_debut;
     always_comb begin : charge
+        protect_en_o = 1'b0; 
         charge_d = charge_q; // On recupere la charge en cours 
         // Si lecture csr et hit, on crée une offuscation en rajoutant une charge +10 qu'on envoie au csr_regfile.
-        if (csr_lecture && nombre_hit > 0 ) begin 
-            charge_d = nombre_hit * 5 ;
-        end else if (reset_charge) begin 
+        if (csr_lecture && cumul_charge > 0 ) begin 
+            charge_d = cumul_charge;    
+        end else if (csr_lecture && cumul_charge<0 )begin
+            protect_en_o = 1'b1;
+            stall_debut = 1'b1;
+        end else if (compteur_stall !=  0) begin
+            protect_en_o = 1'b1;
+            stall_debut = 1'b0; 
+        end  else if (reset_charge) begin 
             charge_d = '0;
         end
 
     end 
 
     assign charge_o = charge_d ; // Sortie de la charge en cours. 
+
+    int nb_cycle;
+    logic new_diff;
+    localparam int unsigned NR_TRANS_IDS = 1 << CVA6Cfg.TRANS_ID_BITS;
+
+    logic [64:0] cycle_load [NR_TRANS_IDS-1:0];
+    logic [64:0] diff_cycle;
 
     always_ff @(posedge clk_i or negedge rst_ni) begin
         if (~rst_ni) begin
@@ -79,10 +103,11 @@ module timewarp
             charge_q  <= '0;
             reset_charge <= 1'b0;
             csr_lecture <= 1'b0;
-            nombre_hit <= '0;
+            cumul_charge <= '0;
             hit_enable <= 1'b0;
             hit_event_o  <= 1'b0;
             deblocage_lecture <= 1'b0;  
+            nb_cycle      <= '0;
         end else begin 
 
             hit_event_o <= 1'b0;
@@ -92,14 +117,8 @@ module timewarp
                 deblocage_lecture <= 1'b1;
             end 
 
-            if ((dcache_hit_q>0) && load_commit_i && hit_enable ) begin
-                if (nombre_hit < 32'(MAX_HIT)) begin
-                    nombre_hit <= nombre_hit + 1'b1;
-                    hit_event_o <= 1'b1;
-                end
-            end  
             dcache_hit_q <= dcache_hit_q + 5'(dcache_hit_i) - 5'((dcache_hit_q>0) && load_commit_i) - 5'((dcache_hit_q>0) && load_invalid_i);
-            // Sauvegarde de la charge en cours
+            // Sauvegarde de la char.ge en cours
             charge_q  <= charge_d;
 
             // Si on a une Lecture csr qui arrive dans le Ex stage, on active le flag
@@ -122,7 +141,7 @@ module timewarp
             end else if (compteur_lecture != 0) begin
                 compteur_lecture <= compteur_lecture - 1 ; 
                 if (compteur_lecture == 1) begin
-                    nombre_hit <= '0;
+                    cumul_charge <= '0;
                     hit_enable <= 1'b0; 
                     hit_en <= 1'b0; 
                     //$display("[cycle %0d] END compteur_lecture timer ",
@@ -133,12 +152,12 @@ module timewarp
             reset_charge <= 1'b0;
             // A partir du commit de la lecture csr, on demarre le timer pendant au minimum de charge cycle + une valeur possible, 
             //si on fait moins on pourrait avoir une incoherence du temps
-            if (nombre_hit>0 && deblocage_lecture) begin 
+            if (cumul_charge != 0 && deblocage_lecture) begin 
                 compteur_coherence_temps <=  32'(CHARGE_TIME) +  charge_d;
                 compteur_lecture <= '0;
                 /*$display("[cycle %0d] START coherence_timer hits=%0d charge=%0d total=%0d",
                     nb_cycle,
-                    nombre_hit,
+                    cumul_charge,
                     charge_d,
                      32'(CHARGE_TIME) + charge_d);*/
             end else if (deblocage_lecture && compteur_coherence_temps > 0) begin // Lecture donc relance du timer si timer déja lancer et commit csr sans hit load 
@@ -149,7 +168,7 @@ module timewarp
                 compteur_coherence_temps <= compteur_coherence_temps - 1 ; 
                 if (compteur_coherence_temps == 1) begin
                     reset_charge <= 1'b1; 
-                    nombre_hit <= '0;
+                    cumul_charge <= '0;
                     hit_enable <= 1'b0; 
                     hit_en <= 1'b0; 
                     //$display("[cycle %0d] END coherence_timer",
@@ -157,12 +176,37 @@ module timewarp
                 end
             end 
         end  
-            
+
+        if (stall_debut) begin 
+            if (cumul_charge<0) begin
+                compteur_stall <= |cumul_charge|; // valeur absolue je sais pas comment faire;
+            end else begin 
+                $display("Probleme stall");
+            end 
+        end else if (compteur_stall !=  0) begin
+                compteur_stall <= compteur_stall - 1 ; 
+        end 
+        new_diff <= 1'b0;
+
+        if (load_new_i)begin
+            cycle_load[load_new_trans_id_i] <= nb_cycle;
+        end 
+        if (load_commit_i) begin
+            diff_cycle <= nb_cycle - cycle_load[commit_load_tran_id_i];
+            new_diff <= 1'b1;
+        end 
+        nb_cycle <= nb_cycle + 1;
     end
 
+    always_comb begin : compte
+        if (new_diff) begin
+            if ((dcache_hit_q>0) && load_commit_i && hit_enable) begin
+                cumul_charge = cumul_charge + (TEMPS_LOAD_HIT - diff_cycle) ;
+            end 
+        end 
+    end
+        
 
-
-    
     logic hit_en_q;
     logic csr_cycle_q;
     logic [4:0] dcache_hit_c;    
@@ -170,7 +214,7 @@ module timewarp
     logic load_commit_q;
     logic lecture_csr_i_q;
     logic csr_lecture_q;
-    logic [31:0] nombre_hit_q;
+    logic [31:0] cumul_charge_i;
     logic hit_enable_q;
     logic dcache_hit_i_q;
     always_ff @(posedge clk_i or negedge rst_ni) begin
@@ -178,10 +222,9 @@ module timewarp
             hit_en_q      <= 1'b0;
             dcache_hit_c  <= '0;
             csr_cycle_q   <= 1'b0;
-            nb_cycle      <= '0;
             csr_lecture_q <= 1'b0;
             lecture_csr_i_q <= 1'b0;
-            nombre_hit_q <= '0;
+            cumul_charge_i <= '0;
             hit_enable_q <= 1'b0;
             dcache_hit_i_q <=  1'b0;
         end else begin
@@ -212,8 +255,8 @@ module timewarp
             if (charge_d != charge_q)
                 $display("[cycle %0d] charge_q=%0d charge_d=%0d charge_o=%0d",
                         nb_cycle, charge_q, charge_d, charge_o);
-            if (nombre_hit_q != nombre_hit || nombre_hit== MAX_HIT)
-                $display("[cycle %0d] nombre_hit -> %0d", nb_cycle, nombre_hit);
+            if (cumul_charge_i != cumul_charge)
+                $display("[cycle %0d] cumul_charge_i -> %0d", nb_cycle, cumul_charge);
             
             if (hit_enable_q != hit_enable )
                 $display("[cycle %0d] hit_enable -> %0d", nb_cycle, hit_enable);
@@ -228,8 +271,7 @@ module timewarp
             load_commit_q <= load_commit_i;
             csr_lecture_q <= csr_lecture;
             lecture_csr_i_q <= lecture_csr_i;
-            nombre_hit_q <= nombre_hit; 
-            nb_cycle <= nb_cycle + 1;
+            cumul_charge_i <= cumul_charge; 
 
         end
     end

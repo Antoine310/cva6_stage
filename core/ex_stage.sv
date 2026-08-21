@@ -230,7 +230,10 @@ module ex_stage
     // Information dedicated to RVFI - RVFI
     output [CVA6Cfg.PLEN-1:0] rvfi_mem_paddr_o,
     // Lecture csr timewarp
-    output logic lecture_csr_o
+    output logic lecture_csr_o,
+    output logic load_new_o,
+    output logic [CVA6Cfg.TRANS_ID_BITS-1:0] load_new_trans_id_o
+
 );
 
   // -------------------------
@@ -510,6 +513,7 @@ module ex_stage
   // ----------------
   fu_data_t lsu_data;
   logic [31:0] lsu_tinst;
+
   always_comb begin
     lsu_data  = lsu_valid_i[0] ? fu_data_i[0] : '0;
     lsu_tinst = tinst_i[0];
@@ -522,6 +526,9 @@ module ex_stage
     end
   end
 
+  assign load_new_o = (|lsu_valid_i) && lsu_ready_o && (lsu_data.fu == LOAD);
+  assign load_new_trans_id_o = lsu_data.trans_id;
+  
   load_store_unit #(
       .CVA6Cfg   (CVA6Cfg),
       .dcache_req_i_t(dcache_req_i_t),
